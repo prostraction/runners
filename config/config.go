@@ -13,6 +13,9 @@ type Runner struct {
 	Token       string `json:"token"`
 	Labels      string `json:"labels"`
 	ContainerID string `json:"container_id,omitempty"`
+	ErrorCount  int    `json:"error_count"`
+	CPULimit    float64 `json:"cpu_limit,omitempty"`    // in cores, e.g., 0.5
+	MemoryLimit int64   `json:"memory_limit,omitempty"` // in MB, e.g., 512
 }
 
 type Config struct {
@@ -29,7 +32,7 @@ func init() {
 	if err != nil {
 		home = "."
 	}
-	ConfigDir = filepath.Join(home, ".runners-manager")
+	ConfigDir = filepath.Join(home, ".runners")
 	ConfigFile = filepath.Join(ConfigDir, "config.json")
 }
 

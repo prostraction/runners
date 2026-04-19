@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Build and Install script for runners-manager
+# Build and Install script for runners
 
-APP_NAME="runners-manager"
+APP_NAME="runners"
 INSTALL_PATH="/usr/local/bin/$APP_NAME"
 
 echo "Building $APP_NAME for Linux..."
@@ -27,6 +27,6 @@ else
 fi
 
 # Create config directory for current user
-mkdir -p ~/.runners-manager
+mkdir -p ~/.runners
 
 echo "Setup complete."

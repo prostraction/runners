@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/runners-manager/config"
-	"github.com/runners-manager/docker"
+	"github.com/runners/config"
+	"github.com/runners/docker"
 	"github.com/spf13/cobra"
 )
 

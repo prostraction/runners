@@ -1,6 +1,6 @@
 package main
 
-import "github.com/runners-manager/cmd"
+import "github.com/runners/cmd"
 
 func main() {
 	cmd.Execute()

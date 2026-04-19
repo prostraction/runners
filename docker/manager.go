@@ -3,14 +3,16 @@ package docker
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
-	"github.com/runners-manager/config"
+	"github.com/docker/docker/pkg/jsonmessage"
+	"github.com/moby/term"
+	"github.com/runners/config"
 )
 
 const RunnerImage = "myoung34/github-runner:latest"
@@ -34,8 +36,9 @@ func (m *Manager) PullImage(ctx context.Context) error {
 		return err
 	}
 	defer reader.Close()
-	io.Copy(os.Stdout, reader)
-	return nil
+
+	termFd, isTerm := term.GetFdInfo(os.Stdout)
+	return jsonmessage.DisplayJSONMessagesStream(reader, os.Stdout, termFd, isTerm, nil)
 }
 
 func (m *Manager) StartRunner(ctx context.Context, runner *config.Runner) error {
@@ -51,16 +54,25 @@ func (m *Manager) StartRunner(ctx context.Context, runner *config.Runner) error 
 
 	containerName := fmt.Sprintf("gh-runner-%s", runner.Name)
 
-	resp, err := m.cli.ContainerCreate(ctx, &container.Config{
-		Image: RunnerImage,
-		Env:   env,
-	}, &container.HostConfig{
+	hostConfig := &container.HostConfig{
 		AutoRemove: false,
 		Privileged: true, // Required for some DinD operations
 		Binds: []string{
 			"/var/run/docker.sock:/var/run/docker.sock", // Mount host docker socket
 		},
-	}, nil, nil, containerName)
+	}
+
+	if runner.CPULimit > 0 {
+		hostConfig.Resources.NanoCPUs = int64(runner.CPULimit * 1e9)
+	}
+	if runner.MemoryLimit > 0 {
+		hostConfig.Resources.Memory = runner.MemoryLimit * 1024 * 1024
+	}
+
+	resp, err := m.cli.ContainerCreate(ctx, &container.Config{
+		Image: RunnerImage,
+		Env:   env,
+	}, hostConfig, nil, nil, containerName)
 
 	if err != nil {
 		// If it's a conflict (container with same name exists), we might want to return a specific error
@@ -116,4 +128,53 @@ func (m *Manager) IsRunning(ctx context.Context, containerID string) (bool, erro
 		return false, err
 	}
 	return inspect.State.Running, nil
+}
+
+type RunnerInfo struct {
+	IsRunning bool
+	Uptime    string
+	ExitCode  int
+}
+
+func (m *Manager) GetRunnerInfo(ctx context.Context, containerID string) (*RunnerInfo, error) {
+	if containerID == "" {
+		return &RunnerInfo{IsRunning: false, Uptime: "-", ExitCode: 0}, nil
+	}
+	inspect, err := m.cli.ContainerInspect(ctx, containerID)
+	if err != nil {
+		if strings.Contains(err.Error(), "No such container") {
+			return &RunnerInfo{IsRunning: false, Uptime: "-", ExitCode: 0}, nil
+		}
+		return nil, err
+	}
+
+	info := &RunnerInfo{
+		IsRunning: inspect.State.Running,
+		ExitCode:  inspect.State.ExitCode,
+	}
+
+	if inspect.State.Running {
+		startedAt, _ := time.Parse(time.RFC3339Nano, inspect.State.StartedAt)
+		duration := time.Since(startedAt).Round(time.Second)
+		info.Uptime = duration.String()
+	} else {
+		info.Uptime = "Stopped"
+	}
+
+	return info, nil
+}
+
+func (m *Manager) UpdateResources(ctx context.Context, containerID string, cpu float64, memory int64) error {
+	resources := container.Resources{}
+	if cpu > 0 {
+		resources.NanoCPUs = int64(cpu * 1e9)
+	}
+	if memory > 0 {
+		resources.Memory = memory * 1024 * 1024
+	}
+
+	_, err := m.cli.ContainerUpdate(ctx, containerID, container.UpdateConfig{
+		Resources: resources,
+	})
+	return err
 }

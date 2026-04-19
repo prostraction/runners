@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/runners-manager/config"
-	"github.com/runners-manager/docker"
+	"github.com/runners/config"
+	"github.com/runners/docker"
 	"github.com/spf13/cobra"
 )
 
@@ -15,6 +15,8 @@ var (
 	addURL    string
 	addToken  string
 	addLabels string
+	addCPU    float64
+	addMemory int64
 )
 
 var addCmd = &cobra.Command{
@@ -22,10 +24,12 @@ var addCmd = &cobra.Command{
 	Short: "Add and start a new GitHub runner",
 	Run: func(cmd *cobra.Command, args []string) {
 		runner := &config.Runner{
-			Name:   addName,
-			URL:    addURL,
-			Token:  addToken,
-			Labels: addLabels,
+			Name:        addName,
+			URL:         addURL,
+			Token:       addToken,
+			Labels:      addLabels,
+			CPULimit:    addCPU,
+			MemoryLimit: addMemory,
 		}
 
 		// First add to config to ensure name is unique
@@ -66,6 +70,8 @@ func init() {
 	addCmd.Flags().StringVarP(&addURL, "url", "u", "", "URL of the GitHub repository or organization (required)")
 	addCmd.Flags().StringVarP(&addToken, "token", "t", "", "Runner registration token (required)")
 	addCmd.Flags().StringVarP(&addLabels, "labels", "l", "", "Optional custom labels (comma-separated)")
+	addCmd.Flags().Float64Var(&addCPU, "cpu", 0, "CPU limit in cores (e.g. 0.5 or 2)")
+	addCmd.Flags().Int64Var(&addMemory, "memory", 0, "Memory limit in MB (e.g. 512 or 2048)")
 	addCmd.MarkFlagRequired("name")
 	addCmd.MarkFlagRequired("url")
 	addCmd.MarkFlagRequired("token")

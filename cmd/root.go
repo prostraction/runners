@@ -10,7 +10,7 @@ import (
 var rootCmd = &cobra.Command{
 	Use:   "runners",
 	Short: "A CLI to manage GitHub runners using Docker",
-	Long:  `Runners Manager is a CLI tool that allows you to easily spin up, manage, and remove multiple GitHub runners on a single machine using Docker.`,
+	Long:  `Runners is a CLI tool that allows you to easily spin up, manage, and remove multiple GitHub runners on a single machine using Docker.`,
 }
 
 func Execute() {

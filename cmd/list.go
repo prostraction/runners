@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"text/tabwriter"
 
-	"github.com/runners-manager/config"
-	"github.com/runners-manager/docker"
+	"github.com/runners/config"
+	"github.com/runners/docker"
 	"github.com/spf13/cobra"
 )
 
@@ -28,16 +29,41 @@ var listCmd = &cobra.Command{
 
 		ctx := context.Background()
 
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "NAME\tURL\tLABELS\tSTATUS")
+		// Get and sort names
+		names := make([]string, 0, len(cfg.Runners))
+		for name := range cfg.Runners {
+			names = append(names, name)
+		}
+		sort.Strings(names)
 
-		for _, r := range cfg.Runners {
-			status := "Stopped"
-			isRunning, _ := dm.IsRunning(ctx, r.ContainerID)
-			if isRunning {
-				status = "Running"
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "NAME\tURL\tLABELS\tSTATUS\tUPTIME\tERRORS\tCPU\tRAM")
+
+		for _, name := range names {
+			r := cfg.Runners[name]
+			info, err := dm.GetRunnerInfo(ctx, r.ContainerID)
+			if err != nil {
+				fmt.Fprintf(w, "%s\t%s\t%s\tError\t-\t%d\t-\t-\n", r.Name, r.URL, r.Labels, r.ErrorCount)
+				continue
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Name, r.URL, r.Labels, status)
+
+			status := "Stopped"
+			if info.IsRunning {
+				status = "Running"
+			} else if info.ExitCode != 0 {
+				status = fmt.Sprintf("Exited(%d)", info.ExitCode)
+			}
+
+			cpuLimit := "-"
+			if r.CPULimit > 0 {
+				cpuLimit = fmt.Sprintf("%.1f", r.CPULimit)
+			}
+			memLimit := "-"
+			if r.MemoryLimit > 0 {
+				memLimit = fmt.Sprintf("%dMB", r.MemoryLimit)
+			}
+
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", r.Name, r.URL, r.Labels, status, info.Uptime, r.ErrorCount, cpuLimit, memLimit)
 		}
 		w.Flush()
 	},

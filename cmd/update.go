@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 
 	"github.com/runners/config"
 	"github.com/runners/docker"
@@ -13,33 +14,22 @@ import (
 var (
 	updateCPU    float64
 	updateMemory int64
+	updateAll    bool
 )
 
 var updateCmd = &cobra.Command{
 	Use:   "update [name]",
-	Short: "Update resource limits for an existing runner",
-	Args:  cobra.ExactArgs(1),
+	Short: "Update resource limits for one or all runners",
+	Args:  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		name := args[0]
-
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			log.Fatalf("Failed to load config: %v", err)
 		}
 
-		runner, exists := cfg.Runners[name]
-		if !exists {
-			log.Fatalf("Runner '%s' not found", name)
-		}
-
-		// Update config values if flags were provided
+		// Check if any changes were specified
 		updated := false
-		if cmd.Flags().Changed("cpu") {
-			runner.CPULimit = updateCPU
-			updated = true
-		}
-		if cmd.Flags().Changed("memory") {
-			runner.MemoryLimit = updateMemory
+		if cmd.Flags().Changed("cpu") || cmd.Flags().Changed("memory") {
 			updated = true
 		}
 
@@ -54,7 +44,58 @@ var updateCmd = &cobra.Command{
 		}
 
 		ctx := context.Background()
+
+		if updateAll {
+			fmt.Println("Updating limits for all runners...")
+			names := make([]string, 0, len(cfg.Runners))
+			for name := range cfg.Runners {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+
+			for _, name := range names {
+				runner := cfg.Runners[name]
+				fmt.Printf("Updating runner '%s'...\n", name)
+				
+				if cmd.Flags().Changed("cpu") {
+					runner.CPULimit = updateCPU
+				}
+				if cmd.Flags().Changed("memory") {
+					runner.MemoryLimit = updateMemory
+				}
+
+				if runner.ContainerID != "" {
+					if err := dm.UpdateResources(ctx, runner.ContainerID, runner.CPULimit, runner.MemoryLimit); err != nil {
+						log.Printf("Warning: failed to update runner '%s' container: %v", name, err)
+					}
+				}
+
+				if err := config.UpdateRunner(runner); err != nil {
+					log.Printf("Error: failed to save config for '%s': %v", name, err)
+				}
+			}
+			fmt.Println("All runners updated.")
+			return
+		}
+
+		if len(args) == 0 {
+			log.Fatal("Please specify a runner name or use --all")
+		}
+
+		name := args[0]
+		runner, exists := cfg.Runners[name]
+		if !exists {
+			log.Fatalf("Runner '%s' not found", name)
+		}
+
 		fmt.Printf("Updating limits for runner '%s'...\n", name)
+		
+		if cmd.Flags().Changed("cpu") {
+			runner.CPULimit = updateCPU
+		}
+		if cmd.Flags().Changed("memory") {
+			runner.MemoryLimit = updateMemory
+		}
 
 		// Apply to Docker container if it exists
 		if runner.ContainerID != "" {
@@ -79,4 +120,5 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 	updateCmd.Flags().Float64Var(&updateCPU, "cpu", 0, "New CPU limit in cores")
 	updateCmd.Flags().Int64Var(&updateMemory, "memory", 0, "New Memory limit in MB")
+	updateCmd.Flags().BoolVarP(&updateAll, "all", "a", false, "Update all runners")
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 
 	"github.com/runners/config"
 	"github.com/runners/docker"
@@ -33,7 +34,15 @@ var rebootCmd = &cobra.Command{
 
 		if rebootAll {
 			fmt.Println("Rebooting all runners...")
-			for name, runner := range cfg.Runners {
+			
+			names := make([]string, 0, len(cfg.Runners))
+			for name := range cfg.Runners {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+
+			for _, name := range names {
+				runner := cfg.Runners[name]
 				fmt.Printf("Rebooting runner '%s'...\n", name)
 				if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
 					log.Printf("Warning during stop for '%s': %v", name, err)

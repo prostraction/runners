@@ -114,6 +114,35 @@ func TestStartRunner(t *testing.T) {
 			if h.Resources.Memory != 512*1024*1024 {
 				t.Errorf("expected 512MB memory limit, got %d", h.Resources.Memory)
 			}
+
+			// Check environment variables
+			expectedEnv := map[string]bool{
+				"REPO_URL=https://github.com/test/repo":    true,
+				"RUNNER_NAME=test":                         true,
+				"RUNNER_TOKEN=token":                       true,
+				"CONFIGURED_ACTIONS_RUNNER_FILES_DIR=/runner/data": true,
+				"DISABLE_AUTOMATIC_DEREGISTRATION=true":    true,
+				"CONFIG_OPTS=--replace":                    true,
+			}
+			for _, env := range c.Env {
+				delete(expectedEnv, env)
+			}
+			if len(expectedEnv) > 0 {
+				t.Errorf("missing environment variables: %v", expectedEnv)
+			}
+
+			// Check binds
+			foundDataBind := false
+			for _, bind := range h.Binds {
+				if strings.Contains(bind, ":/runner/data") {
+					foundDataBind = true
+					break
+				}
+			}
+			if !foundDataBind {
+				t.Error("missing runner data bind")
+			}
+
 			return container.CreateResponse{ID: "test-id"}, nil
 		},
 	}
@@ -121,6 +150,8 @@ func TestStartRunner(t *testing.T) {
 	mgr := &Manager{cli: mock}
 	runner := &config.Runner{
 		Name:        "test",
+		URL:         "https://github.com/test/repo",
+		Token:       "token",
 		MemoryLimit: 512,
 	}
 

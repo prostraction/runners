@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -49,10 +50,19 @@ func (m *Manager) PullImage(ctx context.Context) error {
 
 // StartRunner creates and starts a new runner container.
 func (m *Manager) StartRunner(ctx context.Context, runner *config.Runner) error {
+	// Prepare persistent storage directory
+	dataDir := filepath.Join(config.ConfigDir, "data", runner.Name)
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return fmt.Errorf("failed to create data directory: %w", err)
+	}
+
 	env := []string{
 		fmt.Sprintf("REPO_URL=%s", runner.URL),
 		fmt.Sprintf("RUNNER_NAME=%s", runner.Name),
 		fmt.Sprintf("RUNNER_TOKEN=%s", runner.Token),
+		"CONFIGURED_ACTIONS_RUNNER_FILES_DIR=/runner/data",
+		"DISABLE_AUTOMATIC_DEREGISTRATION=true",
+		"CONFIG_OPTS=--replace",
 	}
 
 	if runner.Labels != "" {
@@ -66,6 +76,7 @@ func (m *Manager) StartRunner(ctx context.Context, runner *config.Runner) error 
 		Privileged: true, // Required for some DinD operations
 		Binds: []string{
 			"/var/run/docker.sock:/var/run/docker.sock", // Mount host docker socket
+			fmt.Sprintf("%s:/runner/data", dataDir),     // Persist runner configuration
 		},
 	}
 

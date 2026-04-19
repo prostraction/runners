@@ -16,9 +16,10 @@ var (
 )
 
 var removeCmd = &cobra.Command{
-	Use:   "remove [name]",
-	Short: "Remove one or all GitHub runners",
-	Args:  cobra.MaximumNArgs(1),
+	Use:     "remove [name...]",
+	Aliases: []string{"rm"},
+	Short:   "Remove one, multiple, or all GitHub runners",
+	Args:    cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadConfig()
 		if err != nil {
@@ -32,56 +33,44 @@ var removeCmd = &cobra.Command{
 
 		ctx := context.Background()
 
+		var namesToRemove []string
 		if removeAll {
 			fmt.Println("Removing all runners...")
-			names := make([]string, 0, len(cfg.Runners))
 			for name := range cfg.Runners {
-				names = append(names, name)
+				namesToRemove = append(namesToRemove, name)
 			}
-			sort.Strings(names)
-
-			for _, name := range names {
-				runner := cfg.Runners[name]
-				fmt.Printf("Stopping and removing runner '%s'...\n", name)
-				if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
-					log.Printf("Warning: failed to stop runner '%s': %v", name, err)
-				}
-				if err := dm.RemoveRunner(ctx, runner.ContainerID); err != nil {
-					log.Printf("Warning: failed to remove container for '%s': %v", name, err)
-				}
-				if err := config.RemoveRunner(name); err != nil {
-					log.Printf("Error: failed to remove '%s' from config: %v", name, err)
-				}
+			sort.Strings(namesToRemove)
+		} else {
+			if len(args) == 0 {
+				return fmt.Errorf("please specify at least one runner name or use --all")
 			}
-			fmt.Println("All runners removed.")
-			return nil
+			namesToRemove = args
 		}
 
-		if len(args) == 0 {
-			return fmt.Errorf("please specify a runner name or use --all")
+		for _, name := range namesToRemove {
+			runner, exists := cfg.Runners[name]
+			if !exists {
+				log.Printf("Warning: runner '%s' not found", name)
+				continue
+			}
+
+			fmt.Printf("Stopping and removing runner '%s'...\n", name)
+			
+			if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
+				log.Printf("Warning: failed to stop container for '%s': %v", name, err)
+			}
+			
+			if err := dm.RemoveRunner(ctx, runner.ContainerID); err != nil {
+				log.Printf("Warning: failed to remove container for '%s': %v", name, err)
+			}
+
+			if err := config.RemoveRunner(name); err != nil {
+				log.Printf("Error: failed to remove '%s' from config: %v", name, err)
+			} else {
+				fmt.Printf("Successfully removed runner '%s'.\n", name)
+			}
 		}
 
-		name := args[0]
-		runner, exists := cfg.Runners[name]
-		if !exists {
-			return fmt.Errorf("runner '%s' not found", name)
-		}
-
-		fmt.Printf("Stopping and removing runner '%s'...\n", name)
-		
-		if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
-			log.Printf("Warning: failed to stop container: %v", err)
-		}
-		
-		if err := dm.RemoveRunner(ctx, runner.ContainerID); err != nil {
-			log.Printf("Warning: failed to remove container: %v", err)
-		}
-
-		if err := config.RemoveRunner(name); err != nil {
-			return fmt.Errorf("failed to remove runner from config: %w", err)
-		}
-
-		fmt.Printf("Successfully removed runner '%s'.\n", name)
 		return nil
 	},
 }

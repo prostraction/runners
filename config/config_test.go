@@ -82,22 +82,30 @@ func TestConfigFlow(t *testing.T) {
 	}
 
 	// 8. Test LoadConfig with invalid JSON
-	os.WriteFile(ConfigFile, []byte("{invalid json}"), 0644)
+	if err := os.WriteFile(ConfigFile, []byte("{invalid json}"), 0644); err != nil {
+		t.Fatalf("failed to write invalid json: %v", err)
+	}
 	_, err = LoadConfig()
 	if err == nil {
 		t.Error("expected error loading invalid JSON, got nil")
 	}
 
 	// 9. Test LoadConfig with non-readable file
-	os.Chmod(ConfigFile, 0000)
+	if err := os.Chmod(ConfigFile, 0000); err != nil {
+		t.Fatalf("failed to chmod: %v", err)
+	}
 	_, err = LoadConfig()
 	if err == nil {
 		t.Error("expected error loading non-readable file, got nil")
 	}
-	os.Chmod(ConfigFile, 0644) // restore for cleanup
+	if err := os.Chmod(ConfigFile, 0644); err != nil { // restore for cleanup
+		t.Fatalf("failed to restore chmod: %v", err)
+	}
 
 	// 10. Test LoadConfig with nil runners map in JSON
-	os.WriteFile(ConfigFile, []byte("{}"), 0644)
+	if err := os.WriteFile(ConfigFile, []byte("{}"), 0644); err != nil {
+		t.Fatalf("failed to write empty json: %v", err)
+	}
 	cfg, err = LoadConfig()
 	if err != nil {
 		t.Errorf("expected no error with empty object, got %v", err)

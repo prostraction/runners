@@ -75,7 +75,13 @@ func init() {
 	addCmd.Flags().Int64Var(&addMemory, "memory", 0, "Memory limit in MB (e.g. 512 or 2048)")
 	addCmd.Flags().Int64Var(&addMemory, "mem", 0, "Alias for --memory")
 	addCmd.Flags().Int64Var(&addMemory, "ram", 0, "Alias for --memory")
-	addCmd.MarkFlagRequired("name")
-	addCmd.MarkFlagRequired("url")
-	addCmd.MarkFlagRequired("token")
+	if err := addCmd.MarkFlagRequired("name"); err != nil {
+		panic(err)
+	}
+	if err := addCmd.MarkFlagRequired("url"); err != nil {
+		panic(err)
+	}
+	if err := addCmd.MarkFlagRequired("token"); err != nil {
+		panic(err)
+	}
 }

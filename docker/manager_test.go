@@ -2,11 +2,15 @@ package docker
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -20,34 +24,89 @@ type mockDockerClient struct {
 	containerStopFunc    func(containerID string) error
 	containerRemoveFunc  func(containerID string) error
 	containerInspectFunc func(containerID string) (types.ContainerJSON, error)
+	imagePullFunc        func(ref string) (io.ReadCloser, error)
+	containerUpdateFunc  func() error
+	containerTopFunc     func() error
 }
 
 func (m *mockDockerClient) ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error) {
-	return m.containerCreateFunc(config, hostConfig)
+	if m.containerCreateFunc != nil {
+		return m.containerCreateFunc(config, hostConfig)
+	}
+	return container.CreateResponse{ID: "default-id"}, nil
 }
 
 func (m *mockDockerClient) ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error {
-	return m.containerStartFunc(containerID)
+	if m.containerStartFunc != nil {
+		return m.containerStartFunc(containerID)
+	}
+	return nil
 }
 
 func (m *mockDockerClient) ContainerStop(ctx context.Context, containerID string, options container.StopOptions) error {
-	return m.containerStopFunc(containerID)
+	if m.containerStopFunc != nil {
+		return m.containerStopFunc(containerID)
+	}
+	return nil
 }
 
 func (m *mockDockerClient) ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error {
-	return m.containerRemoveFunc(containerID)
+	if m.containerRemoveFunc != nil {
+		return m.containerRemoveFunc(containerID)
+	}
+	return nil
 }
 
 func (m *mockDockerClient) ContainerInspect(ctx context.Context, containerID string) (types.ContainerJSON, error) {
-	return m.containerInspectFunc(containerID)
+	if m.containerInspectFunc != nil {
+		return m.containerInspectFunc(containerID)
+	}
+	return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{State: &types.ContainerState{Running: true}}}, nil
+}
+
+func (m *mockDockerClient) ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error) {
+	if m.imagePullFunc != nil {
+		return m.imagePullFunc(ref)
+	}
+	return io.NopCloser(strings.NewReader(`{"status":"Done"}`)), nil
 }
 
 func (m *mockDockerClient) ContainerUpdate(ctx context.Context, containerID string, updateConfig container.UpdateConfig) (container.ContainerUpdateOKBody, error) {
+	if m.containerUpdateFunc != nil {
+		return container.ContainerUpdateOKBody{}, m.containerUpdateFunc()
+	}
 	return container.ContainerUpdateOKBody{}, nil
 }
 
 func (m *mockDockerClient) ContainerTop(ctx context.Context, containerID string, arguments []string) (container.ContainerTopOKBody, error) {
+	if m.containerTopFunc != nil {
+		return container.ContainerTopOKBody{}, m.containerTopFunc()
+	}
 	return container.ContainerTopOKBody{Processes: [][]string{{"123", "Runner.Worker"}}}, nil
+}
+
+func TestPullImage(t *testing.T) {
+	// 1. Success
+	mock := &mockDockerClient{
+		imagePullFunc: func(ref string) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader(`{"status":"Done"}`)), nil
+		},
+	}
+	mgr := &Manager{cli: mock}
+	if err := mgr.PullImage(context.Background()); err != nil {
+		t.Errorf("PullImage failed: %v", err)
+	}
+
+	// 2. Failure
+	mockErr := &mockDockerClient{
+		imagePullFunc: func(ref string) (io.ReadCloser, error) {
+			return nil, fmt.Errorf("pull error")
+		},
+	}
+	mgrErr := &Manager{cli: mockErr}
+	if err := mgrErr.PullImage(context.Background()); err == nil {
+		t.Error("expected error when ImagePull fails")
+	}
 }
 
 func TestStartRunner(t *testing.T) {
@@ -57,9 +116,6 @@ func TestStartRunner(t *testing.T) {
 				t.Errorf("expected 512MB memory limit, got %d", h.Resources.Memory)
 			}
 			return container.CreateResponse{ID: "test-id"}, nil
-		},
-		containerStartFunc: func(id string) error {
-			return nil
 		},
 	}
 
@@ -109,13 +165,23 @@ func TestRemoveRunner(t *testing.T) {
 	}
 }
 
-func TestIsRunning(t *testing.T) {
+func TestResumeRunner(t *testing.T) {
+	called := false
 	mock := &mockDockerClient{
-		containerInspectFunc: func(id string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{State: &types.ContainerState{Running: true}}}, nil
+		containerStartFunc: func(id string) error {
+			called = true
+			return nil
 		},
 	}
 	mgr := &Manager{cli: mock}
+	mgr.ResumeRunner(context.Background(), "id")
+	if !called {
+		t.Error("ResumeRunner (ContainerStart) was not called")
+	}
+}
+
+func TestIsRunning(t *testing.T) {
+	mgr := &Manager{cli: &mockDockerClient{}}
 	running, _ := mgr.IsRunning(context.Background(), "id")
 	if !running {
 		t.Error("Expected IsRunning to be true")
@@ -123,10 +189,20 @@ func TestIsRunning(t *testing.T) {
 }
 
 func TestUpdateResources(t *testing.T) {
+	// 1. Success
 	mgr := &Manager{cli: &mockDockerClient{}}
 	err := mgr.UpdateResources(context.Background(), "id", 0.5, 1024)
 	if err != nil {
 		t.Errorf("UpdateResources failed: %v", err)
+	}
+
+	// 2. Failure
+	mockErr := &mockDockerClient{
+		containerUpdateFunc: func() error { return fmt.Errorf("update fail") },
+	}
+	mgrErr := &Manager{cli: mockErr}
+	if err := mgrErr.UpdateResources(context.Background(), "id", 1, 1); err == nil {
+		t.Error("expected error when ContainerUpdate fails")
 	}
 }
 
@@ -148,5 +224,102 @@ func TestGetRunnerInfo(t *testing.T) {
 	}
 	if info.InternalStatus != "Working" {
 		t.Errorf("expected status 'Working', got '%s'", info.InternalStatus)
+	}
+}
+
+func TestGetRunnerInfoExtra(t *testing.T) {
+	// Test when ContainerTop fails
+	mock := &mockDockerClient{
+		containerInspectFunc: func(id string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{Running: true, StartedAt: time.Now().Format(time.RFC3339Nano)},
+			}}, nil
+		},
+		containerTopFunc: func() error { return fmt.Errorf("top error") },
+	}
+	mgr := &Manager{cli: mock}
+	info, _ := mgr.GetRunnerInfo(context.Background(), "id")
+	if info.InternalStatus != "-" {
+		t.Errorf("expected status '-' when top fails, got '%s'", info.InternalStatus)
+	}
+}
+
+func TestStartRunnerFailures(t *testing.T) {
+	ctx := context.Background()
+	runner := &config.Runner{Name: "fail"}
+
+	// 1. Create fails
+	mock := &mockDockerClient{
+		containerCreateFunc: func(c *container.Config, h *container.HostConfig) (container.CreateResponse, error) {
+			return container.CreateResponse{}, fmt.Errorf("creation error")
+		},
+	}
+	mgr := &Manager{cli: mock}
+	if err := mgr.StartRunner(ctx, runner); err == nil {
+		t.Error("expected error when creation fails")
+	}
+
+	// 2. Start fails
+	mockStartFail := &mockDockerClient{
+		containerCreateFunc: func(c *container.Config, h *container.HostConfig) (container.CreateResponse, error) {
+			return container.CreateResponse{ID: "id"}, nil
+		},
+		containerStartFunc: func(id string) error {
+			return fmt.Errorf("start error")
+		},
+	}
+	mgrStartFail := &Manager{cli: mockStartFail}
+	if err := mgrStartFail.StartRunner(ctx, runner); err == nil {
+		t.Error("expected error when start fails")
+	}
+}
+
+func TestDockerErrors(t *testing.T) {
+	mgr := &Manager{cli: &mockDockerClient{
+		containerInspectFunc: func(id string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{}, fmt.Errorf("Error response from daemon: No such container")
+		},
+	}}
+
+	// Test IsRunning with missing container
+	running, _ := mgr.IsRunning(context.Background(), "id")
+	if running {
+		t.Error("expected running to be false for non-existent container")
+	}
+
+	// Test GetRunnerInfo with missing container
+	info, _ := mgr.GetRunnerInfo(context.Background(), "id")
+	if info.IsRunning {
+		t.Error("expected info.IsRunning to be false")
+	}
+
+	// Test empty container IDs
+	mgr.StopRunner(context.Background(), "")
+	mgr.RemoveRunner(context.Background(), "")
+	running, _ = mgr.IsRunning(context.Background(), "")
+	if running {
+		t.Error("empty ID should not be running")
+	}
+
+	// Test StopRunner error (other than not found)
+	mockStopFail := &mockDockerClient{
+		containerStopFunc: func(id string) error {
+			return fmt.Errorf("stop error")
+		},
+	}
+	mgrStopFail := &Manager{cli: mockStopFail}
+	if err := mgrStopFail.StopRunner(context.Background(), "id"); err == nil {
+		t.Error("expected error when stop fails")
+	}
+
+	// Test RemoveRunner error (other than not found)
+	mockRemoveFail := &mockDockerClient{
+		containerRemoveFunc: func(id string) error {
+			return fmt.Errorf("remove error")
+		},
+	}
+	mgrRemoveFail := &Manager{cli: mockRemoveFail}
+	if err := mgrRemoveFail.RemoveRunner(context.Background(), "id"); err == nil {
+		t.Error("expected error when remove fails")
 	}
 }

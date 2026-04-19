@@ -29,7 +29,5 @@ jobs:
         run: go test -v -cover ./...
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          args: --timeout=5m
+        run: go run github.com/golangci/golangci-lint/cmd/golangci-lint@latest run --timeout=5m
+

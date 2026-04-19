@@ -80,4 +80,43 @@ func TestConfigFlow(t *testing.T) {
 	if err == nil {
 		t.Errorf("expected error removing non-existent runner, got nil")
 	}
+
+	// 8. Test LoadConfig with invalid JSON
+	os.WriteFile(ConfigFile, []byte("{invalid json}"), 0644)
+	_, err = LoadConfig()
+	if err == nil {
+		t.Error("expected error loading invalid JSON, got nil")
+	}
+
+	// 9. Test LoadConfig with non-readable file
+	os.Chmod(ConfigFile, 0000)
+	_, err = LoadConfig()
+	if err == nil {
+		t.Error("expected error loading non-readable file, got nil")
+	}
+	os.Chmod(ConfigFile, 0644) // restore for cleanup
+
+	// 10. Test LoadConfig with nil runners map in JSON
+	os.WriteFile(ConfigFile, []byte("{}"), 0644)
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Errorf("expected no error with empty object, got %v", err)
+	}
+	if cfg.Runners == nil {
+		t.Error("expected Runners map to be initialized, got nil")
+	}
+}
+
+func TestSaveConfigError(t *testing.T) {
+	// Try to save to a file that is actually a directory (will fail on WriteFile)
+	tmpDir, _ := os.MkdirTemp("", "runners-fail")
+	defer os.RemoveAll(tmpDir)
+	
+	ConfigDir = tmpDir
+	ConfigFile = tmpDir // ConfigFile points to a directory
+	
+	err := SaveConfig(&Config{})
+	if err == nil {
+		t.Error("expected error saving when ConfigFile is a directory, got nil")
+	}
 }

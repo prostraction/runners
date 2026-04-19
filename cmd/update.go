@@ -29,7 +29,7 @@ var updateCmd = &cobra.Command{
 
 		// Check if any changes were specified
 		updated := false
-		if cmd.Flags().Changed("cpu") || cmd.Flags().Changed("memory") {
+		if cmd.Flags().Changed("cpu") || cmd.Flags().Changed("memory") || cmd.Flags().Changed("mem") || cmd.Flags().Changed("ram") {
 			updated = true
 		}
 
@@ -56,11 +56,11 @@ var updateCmd = &cobra.Command{
 			for _, name := range names {
 				runner := cfg.Runners[name]
 				fmt.Printf("Updating runner '%s'...\n", name)
-				
+
 				if cmd.Flags().Changed("cpu") {
 					runner.CPULimit = updateCPU
 				}
-				if cmd.Flags().Changed("memory") {
+				if cmd.Flags().Changed("memory") || cmd.Flags().Changed("mem") || cmd.Flags().Changed("ram") {
 					runner.MemoryLimit = updateMemory
 				}
 
@@ -71,7 +71,7 @@ var updateCmd = &cobra.Command{
 				}
 
 				if err := config.UpdateRunner(runner); err != nil {
-					log.Printf("Error: failed to save config for '%s': %v", name, err)
+					log.Printf("Error: failed to remove '%s' from config: %v", name, err)
 				}
 			}
 			fmt.Println("All runners updated.")
@@ -89,13 +89,14 @@ var updateCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Updating limits for runner '%s'...\n", name)
-		
+
 		if cmd.Flags().Changed("cpu") {
 			runner.CPULimit = updateCPU
 		}
-		if cmd.Flags().Changed("memory") {
+		if cmd.Flags().Changed("memory") || cmd.Flags().Changed("mem") || cmd.Flags().Changed("ram") {
 			runner.MemoryLimit = updateMemory
 		}
+
 
 		// Apply to Docker container if it exists
 		if runner.ContainerID != "" {
@@ -120,5 +121,7 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 	updateCmd.Flags().Float64Var(&updateCPU, "cpu", 0, "New CPU limit in cores")
 	updateCmd.Flags().Int64Var(&updateMemory, "memory", 0, "New Memory limit in MB")
+	updateCmd.Flags().Int64Var(&updateMemory, "mem", 0, "Alias for --memory")
+	updateCmd.Flags().Int64Var(&updateMemory, "ram", 0, "Alias for --memory")
 	updateCmd.Flags().BoolVarP(&updateAll, "all", "a", false, "Update all runners")
 }

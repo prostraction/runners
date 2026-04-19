@@ -18,7 +18,7 @@ import (
 const RunnerImage = "myoung34/github-runner:latest"
 
 type Manager struct {
-	cli *client.Client
+	cli client.CommonAPIClient
 }
 
 func NewManager() (*Manager, error) {

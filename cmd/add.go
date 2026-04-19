@@ -72,6 +72,8 @@ func init() {
 	addCmd.Flags().StringVarP(&addLabels, "labels", "l", "", "Optional custom labels (comma-separated)")
 	addCmd.Flags().Float64Var(&addCPU, "cpu", 0, "CPU limit in cores (e.g. 0.5 or 2)")
 	addCmd.Flags().Int64Var(&addMemory, "memory", 0, "Memory limit in MB (e.g. 512 or 2048)")
+	addCmd.Flags().Int64Var(&addMemory, "mem", 0, "Alias for --memory")
+	addCmd.Flags().Int64Var(&addMemory, "ram", 0, "Alias for --memory")
 	addCmd.MarkFlagRequired("name")
 	addCmd.MarkFlagRequired("url")
 	addCmd.MarkFlagRequired("token")

@@ -46,6 +46,7 @@ This compiles the binary and moves it to `/usr/local/bin/runners`.
 | :--- | :--- | :---: |
 | `add` | Register and start a new GitHub runner | No |
 | `list` | List all runners with status, uptime, and limits | N/A |
+| `start` | Start one or all stopped runners | Yes |
 | `stop` | Stop one or all running runners | Yes |
 | `reboot` | Restart one or all runners | Yes |
 | `update` | Update resource limits (CPU/RAM) dynamically | Yes |
@@ -77,6 +78,9 @@ runners update --all --cpu 0.5 --memory 1024
 #### Lifecycle Control
 All mass operations (`--all`) are processed in alphabetical order.
 ```bash
+# Start all runners
+runners start -a
+
 # Stop all runners
 runners stop -a
 

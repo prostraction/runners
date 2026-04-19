@@ -130,6 +130,10 @@ func (m *Manager) IsRunning(ctx context.Context, containerID string) (bool, erro
 	return inspect.State.Running, nil
 }
 
+func (m *Manager) ResumeRunner(ctx context.Context, containerID string) error {
+	return m.cli.ContainerStart(ctx, containerID, container.StartOptions{})
+}
+
 type RunnerInfo struct {
 	IsRunning      bool
 	Uptime         string

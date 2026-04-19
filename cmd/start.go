@@ -51,7 +51,17 @@ var startCmd = &cobra.Command{
 				}
 
 				fmt.Printf("Starting runner '%s'...\n", name)
-				// Clean up old container if exists
+				
+				// Try to resume existing container first to preserve registration
+				if runner.ContainerID != "" {
+					if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
+						fmt.Printf("Runner '%s' resumed.\n", name)
+						continue
+					}
+				}
+
+				// Fallback to creating a new container (requires valid token)
+				fmt.Printf("Container not found or failed to resume. Re-creating runner '%s'...\n", name)
 				_ = dm.RemoveRunner(ctx, runner.ContainerID)
 
 				if err := dm.StartRunner(ctx, runner); err != nil {
@@ -83,6 +93,15 @@ var startCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Starting runner '%s'...\n", name)
+		
+		if runner.ContainerID != "" {
+			if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
+				fmt.Printf("Runner '%s' resumed.\n", name)
+				return
+			}
+		}
+
+		fmt.Printf("Container not found or failed to resume. Re-creating runner '%s'...\n", name)
 		_ = dm.RemoveRunner(ctx, runner.ContainerID)
 
 		if err := dm.StartRunner(ctx, runner); err != nil {

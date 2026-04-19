@@ -46,14 +46,18 @@ var rebootCmd = &cobra.Command{
 				runner := cfg.Runners[name]
 				fmt.Printf("Rebooting runner '%s'...\n", name)
 				
-				// Stop and remove existing container
+				// Stop existing container
 				if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
 					log.Printf("Warning during stop for '%s': %v", name, err)
 				}
-				if err := dm.RemoveRunner(ctx, runner.ContainerID); err != nil {
-					log.Printf("Warning during removal for '%s': %v", name, err)
+
+				// Try to resume first
+				if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
+					continue
 				}
 
+				// If resume fails, it means container is missing, so we must recreate
+				fmt.Printf("Container for '%s' missing. Re-creating...\n", name)
 				if err := dm.StartRunner(ctx, runner); err != nil {
 					log.Printf("Error: failed to restart runner '%s': %v", name, err)
 					continue
@@ -78,20 +82,24 @@ var rebootCmd = &cobra.Command{
 
 		fmt.Printf("Rebooting runner '%s'...\n", name)
 		
-		// Stop and remove if running
+		// Stop if running
 		if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
 			log.Printf("Warning during stop: %v", err)
 		}
-		if err := dm.RemoveRunner(ctx, runner.ContainerID); err != nil {
-			log.Printf("Warning during removal: %v", err)
+
+		// Try to resume
+		if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
+			fmt.Printf("Successfully rebooted runner '%s' (resumed).\n", name)
+			return
 		}
 
-		// Start again
+		// Fallback to recreate
+		fmt.Printf("Container for '%s' missing. Re-creating...\n", name)
+		_ = dm.RemoveRunner(ctx, runner.ContainerID)
 		if err := dm.StartRunner(ctx, runner); err != nil {
 			log.Fatalf("Failed to start runner: %v", err)
 		}
 
-		// Update config with potentially new container ID
 		if err := config.UpdateRunner(runner); err != nil {
 			log.Printf("Warning: failed to save container ID to config: %v", err)
 		}

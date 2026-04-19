@@ -19,15 +19,15 @@ var stopCmd = &cobra.Command{
 	Use:   "stop [name]",
 	Short: "Stop one or all running GitHub runners",
 	Args:  cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadConfig()
 		if err != nil {
-			log.Fatalf("Failed to load config: %v", err)
+			return fmt.Errorf("failed to load config: %w", err)
 		}
 
 		dm, err := docker.NewManager()
 		if err != nil {
-			log.Fatalf("Failed to initialize docker manager: %v", err)
+			return fmt.Errorf("failed to initialize docker manager: %w", err)
 		}
 
 		ctx := context.Background()
@@ -49,25 +49,26 @@ var stopCmd = &cobra.Command{
 				}
 			}
 			fmt.Println("All runners stopped.")
-			return
+			return nil
 		}
 
 		if len(args) == 0 {
-			log.Fatal("Please specify a runner name or use --all")
+			return fmt.Errorf("please specify a runner name or use --all")
 		}
 
 		name := args[0]
 		runner, exists := cfg.Runners[name]
 		if !exists {
-			log.Fatalf("Runner '%s' not found", name)
+			return fmt.Errorf("runner '%s' not found", name)
 		}
 
 		fmt.Printf("Stopping runner '%s'...\n", name)
 		if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
-			log.Fatalf("Failed to stop runner: %v", err)
+			return fmt.Errorf("failed to stop runner: %w", err)
 		}
 
 		fmt.Printf("Successfully stopped runner '%s'.\n", name)
+		return nil
 	},
 }
 

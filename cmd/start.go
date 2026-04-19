@@ -19,15 +19,15 @@ var startCmd = &cobra.Command{
 	Use:   "start [name]",
 	Short: "Start one or all stopped GitHub runners",
 	Args:  cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadConfig()
 		if err != nil {
-			log.Fatalf("Failed to load config: %v", err)
+			return fmt.Errorf("failed to load config: %w", err)
 		}
 
 		dm, err := docker.NewManager()
 		if err != nil {
-			log.Fatalf("Failed to initialize docker manager: %v", err)
+			return fmt.Errorf("failed to initialize docker manager: %w", err)
 		}
 
 		ctx := context.Background()
@@ -73,23 +73,23 @@ var startCmd = &cobra.Command{
 				}
 			}
 			fmt.Println("Done.")
-			return
+			return nil
 		}
 
 		if len(args) == 0 {
-			log.Fatal("Please specify a runner name or use --all")
+			return fmt.Errorf("please specify a runner name or use --all")
 		}
 
 		name := args[0]
 		runner, exists := cfg.Runners[name]
 		if !exists {
-			log.Fatalf("Runner '%s' not found", name)
+			return fmt.Errorf("runner '%s' not found", name)
 		}
 
 		isRunning, _ := dm.IsRunning(ctx, runner.ContainerID)
 		if isRunning {
 			fmt.Printf("Runner '%s' is already running.\n", name)
-			return
+			return nil
 		}
 
 		fmt.Printf("Starting runner '%s'...\n", name)
@@ -97,7 +97,7 @@ var startCmd = &cobra.Command{
 		if runner.ContainerID != "" {
 			if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
 				fmt.Printf("Runner '%s' resumed.\n", name)
-				return
+				return nil
 			}
 		}
 
@@ -105,7 +105,7 @@ var startCmd = &cobra.Command{
 		_ = dm.RemoveRunner(ctx, runner.ContainerID)
 
 		if err := dm.StartRunner(ctx, runner); err != nil {
-			log.Fatalf("Failed to start runner: %v", err)
+			return fmt.Errorf("failed to start runner: %w", err)
 		}
 
 		if err := config.UpdateRunner(runner); err != nil {
@@ -113,6 +113,7 @@ var startCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Successfully started runner '%s'.\n", name)
+		return nil
 	},
 }
 

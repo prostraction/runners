@@ -15,12 +15,15 @@ import (
 	"github.com/runners/config"
 )
 
+// RunnerImage is the docker image used for GitHub runners.
 const RunnerImage = "myoung34/github-runner:latest"
 
+// Manager handles docker operations for GitHub runners.
 type Manager struct {
-	cli client.CommonAPIClient
+	cli client.APIClient
 }
 
+// NewManager creates a new Docker manager.
 func NewManager() (*Manager, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
@@ -29,18 +32,22 @@ func NewManager() (*Manager, error) {
 	return &Manager{cli: cli}, nil
 }
 
+// PullImage downloads the runner image from the registry.
 func (m *Manager) PullImage(ctx context.Context) error {
 	fmt.Printf("Pulling image %s...\n", RunnerImage)
 	reader, err := m.cli.ImagePull(ctx, RunnerImage, image.PullOptions{})
 	if err != nil {
 		return err
 	}
-	defer reader.Close()
+	defer func() {
+		_ = reader.Close()
+	}()
 
 	termFd, isTerm := term.GetFdInfo(os.Stdout)
 	return jsonmessage.DisplayJSONMessagesStream(reader, os.Stdout, termFd, isTerm, nil)
 }
 
+// StartRunner creates and starts a new runner container.
 func (m *Manager) StartRunner(ctx context.Context, runner *config.Runner) error {
 	env := []string{
 		fmt.Sprintf("REPO_URL=%s", runner.URL),
@@ -77,7 +84,6 @@ func (m *Manager) StartRunner(ctx context.Context, runner *config.Runner) error 
 	}, hostConfig, nil, nil, containerName)
 
 	if err != nil {
-		// If it's a conflict (container with same name exists), we might want to return a specific error
 		return fmt.Errorf("failed to create container: %w", err)
 	}
 
@@ -89,6 +95,7 @@ func (m *Manager) StartRunner(ctx context.Context, runner *config.Runner) error 
 	return nil
 }
 
+// StopRunner stops a running container.
 func (m *Manager) StopRunner(ctx context.Context, containerID string) error {
 	if containerID == "" {
 		return nil // Not running
@@ -103,6 +110,7 @@ func (m *Manager) StopRunner(ctx context.Context, containerID string) error {
 	return nil
 }
 
+// RemoveRunner removes a container.
 func (m *Manager) RemoveRunner(ctx context.Context, containerID string) error {
 	if containerID == "" {
 		return nil
@@ -118,6 +126,7 @@ func (m *Manager) RemoveRunner(ctx context.Context, containerID string) error {
 	return nil
 }
 
+// IsRunning checks if a container is currently running.
 func (m *Manager) IsRunning(ctx context.Context, containerID string) (bool, error) {
 	if containerID == "" {
 		return false, nil
@@ -132,10 +141,12 @@ func (m *Manager) IsRunning(ctx context.Context, containerID string) (bool, erro
 	return inspect.State.Running, nil
 }
 
+// ResumeRunner starts an existing container.
 func (m *Manager) ResumeRunner(ctx context.Context, containerID string) error {
 	return m.cli.ContainerStart(ctx, containerID, container.StartOptions{})
 }
 
+// RunnerInfo contains detailed information about a runner's status.
 type RunnerInfo struct {
 	IsRunning      bool
 	Uptime         string
@@ -143,6 +154,7 @@ type RunnerInfo struct {
 	InternalStatus string // "Idle" or "Working"
 }
 
+// GetRunnerInfo retrieves detailed status for a runner.
 func (m *Manager) GetRunnerInfo(ctx context.Context, containerID string) (*RunnerInfo, error) {
 	if containerID == "" {
 		return &RunnerInfo{IsRunning: false, Uptime: "-", ExitCode: 0, InternalStatus: "-"}, nil
@@ -162,9 +174,13 @@ func (m *Manager) GetRunnerInfo(ctx context.Context, containerID string) (*Runne
 	}
 
 	if inspect.State.Running {
-		startedAt, _ := time.Parse(time.RFC3339Nano, inspect.State.StartedAt)
-		duration := time.Since(startedAt).Round(time.Second)
-		info.Uptime = duration.String()
+		startedAt, err := time.Parse(time.RFC3339Nano, inspect.State.StartedAt)
+		if err == nil {
+			duration := time.Since(startedAt).Round(time.Second)
+			info.Uptime = duration.String()
+		} else {
+			info.Uptime = "Unknown"
+		}
 
 		// Check internal status by looking at processes
 		top, err := m.cli.ContainerTop(ctx, containerID, nil)
@@ -191,6 +207,7 @@ func (m *Manager) GetRunnerInfo(ctx context.Context, containerID string) (*Runne
 	return info, nil
 }
 
+// UpdateResources dynamically updates container resource limits.
 func (m *Manager) UpdateResources(ctx context.Context, containerID string, cpu float64, memory int64) error {
 	resources := container.Resources{}
 	if cpu > 0 {

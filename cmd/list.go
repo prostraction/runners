@@ -16,15 +16,15 @@ import (
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all configured GitHub runners",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadConfig()
 		if err != nil {
-			log.Fatalf("Failed to load config: %v", err)
+			return fmt.Errorf("failed to load config: %w", err)
 		}
 
 		dm, err := docker.NewManager()
 		if err != nil {
-			log.Fatalf("Failed to initialize docker manager: %v", err)
+			return fmt.Errorf("failed to initialize docker manager: %w", err)
 		}
 
 		ctx := context.Background()
@@ -65,7 +65,10 @@ var listCmd = &cobra.Command{
 
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", r.Name, r.URL, r.Labels, status, info.Uptime, r.ErrorCount, cpuLimit, memLimit)
 		}
-		w.Flush()
+		if err := w.Flush(); err != nil {
+			log.Printf("Warning: failed to flush output: %v", err)
+		}
+		return nil
 	},
 }
 

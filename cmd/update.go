@@ -21,10 +21,10 @@ var updateCmd = &cobra.Command{
 	Use:   "update [name]",
 	Short: "Update resource limits for one or all runners",
 	Args:  cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadConfig()
 		if err != nil {
-			log.Fatalf("Failed to load config: %v", err)
+			return fmt.Errorf("failed to load config: %w", err)
 		}
 
 		// Check if any changes were specified
@@ -35,12 +35,12 @@ var updateCmd = &cobra.Command{
 
 		if !updated {
 			fmt.Println("No changes specified. Use --cpu or --memory to update limits.")
-			return
+			return nil
 		}
 
 		dm, err := docker.NewManager()
 		if err != nil {
-			log.Fatalf("Failed to initialize docker manager: %v", err)
+			return fmt.Errorf("failed to initialize docker manager: %w", err)
 		}
 
 		ctx := context.Background()
@@ -71,21 +71,21 @@ var updateCmd = &cobra.Command{
 				}
 
 				if err := config.UpdateRunner(runner); err != nil {
-					log.Printf("Error: failed to remove '%s' from config: %v", name, err)
+					log.Printf("Error: failed to update '%s' in config: %v", name, err)
 				}
 			}
 			fmt.Println("All runners updated.")
-			return
+			return nil
 		}
 
 		if len(args) == 0 {
-			log.Fatal("Please specify a runner name or use --all")
+			return fmt.Errorf("please specify a runner name or use --all")
 		}
 
 		name := args[0]
 		runner, exists := cfg.Runners[name]
 		if !exists {
-			log.Fatalf("Runner '%s' not found", name)
+			return fmt.Errorf("runner '%s' not found", name)
 		}
 
 		fmt.Printf("Updating limits for runner '%s'...\n", name)
@@ -96,7 +96,6 @@ var updateCmd = &cobra.Command{
 		if cmd.Flags().Changed("memory") || cmd.Flags().Changed("mem") || cmd.Flags().Changed("ram") {
 			runner.MemoryLimit = updateMemory
 		}
-
 
 		// Apply to Docker container if it exists
 		if runner.ContainerID != "" {
@@ -110,13 +109,13 @@ var updateCmd = &cobra.Command{
 
 		// Save to config
 		if err := config.UpdateRunner(runner); err != nil {
-			log.Fatalf("Failed to save updated config: %v", err)
+			return fmt.Errorf("failed to save updated config: %w", err)
 		}
 
 		fmt.Printf("Runner '%s' configuration updated.\n", name)
+		return nil
 	},
 }
-
 func init() {
 	rootCmd.AddCommand(updateCmd)
 	updateCmd.Flags().Float64Var(&updateCPU, "cpu", 0, "New CPU limit in cores")

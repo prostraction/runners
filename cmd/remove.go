@@ -19,15 +19,15 @@ var removeCmd = &cobra.Command{
 	Use:   "remove [name]",
 	Short: "Remove one or all GitHub runners",
 	Args:  cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadConfig()
 		if err != nil {
-			log.Fatalf("Failed to load config: %v", err)
+			return fmt.Errorf("failed to load config: %w", err)
 		}
 
 		dm, err := docker.NewManager()
 		if err != nil {
-			log.Fatalf("Failed to initialize docker manager: %v", err)
+			return fmt.Errorf("failed to initialize docker manager: %w", err)
 		}
 
 		ctx := context.Background()
@@ -54,17 +54,17 @@ var removeCmd = &cobra.Command{
 				}
 			}
 			fmt.Println("All runners removed.")
-			return
+			return nil
 		}
 
 		if len(args) == 0 {
-			log.Fatal("Please specify a runner name or use --all")
+			return fmt.Errorf("please specify a runner name or use --all")
 		}
 
 		name := args[0]
 		runner, exists := cfg.Runners[name]
 		if !exists {
-			log.Fatalf("Runner '%s' not found", name)
+			return fmt.Errorf("runner '%s' not found", name)
 		}
 
 		fmt.Printf("Stopping and removing runner '%s'...\n", name)
@@ -78,10 +78,11 @@ var removeCmd = &cobra.Command{
 		}
 
 		if err := config.RemoveRunner(name); err != nil {
-			log.Fatalf("Failed to remove runner from config: %v", err)
+			return fmt.Errorf("failed to remove runner from config: %w", err)
 		}
 
 		fmt.Printf("Successfully removed runner '%s'.\n", name)
+		return nil
 	},
 }
 

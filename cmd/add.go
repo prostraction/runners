@@ -22,7 +22,7 @@ var (
 var addCmd = &cobra.Command{
 	Use:   "add",
 	Short: "Add and start a new GitHub runner",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		runner := &config.Runner{
 			Name:        addName,
 			URL:         addURL,
@@ -34,13 +34,13 @@ var addCmd = &cobra.Command{
 
 		// First add to config to ensure name is unique
 		if err := config.AddRunner(runner); err != nil {
-			log.Fatalf("Failed to add runner to config: %v", err)
+			return fmt.Errorf("failed to add runner to config: %w", err)
 		}
 
 		dm, err := docker.NewManager()
 		if err != nil {
-			config.RemoveRunner(runner.Name)
-			log.Fatalf("Failed to initialize docker manager: %v", err)
+			_ = config.RemoveRunner(runner.Name)
+			return fmt.Errorf("failed to initialize docker manager: %w", err)
 		}
 
 		ctx := context.Background()
@@ -51,8 +51,8 @@ var addCmd = &cobra.Command{
 		}
 
 		if err := dm.StartRunner(ctx, runner); err != nil {
-			config.RemoveRunner(runner.Name)
-			log.Fatalf("Failed to start runner container: %v", err)
+			_ = config.RemoveRunner(runner.Name)
+			return fmt.Errorf("failed to start runner container: %w", err)
 		}
 
 		// Update config with container ID
@@ -61,6 +61,7 @@ var addCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Successfully added and started runner '%s'!\n", runner.Name)
+		return nil
 	},
 }
 

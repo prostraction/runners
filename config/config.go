@@ -7,23 +7,27 @@ import (
 	"path/filepath"
 )
 
+// Runner represents a GitHub runner configuration.
 type Runner struct {
-	Name        string `json:"name"`
-	URL         string `json:"url"`
-	Token       string `json:"token"`
-	Labels      string `json:"labels"`
-	ContainerID string `json:"container_id,omitempty"`
-	ErrorCount  int    `json:"error_count"`
+	Name        string  `json:"name"`
+	URL         string  `json:"url"`
+	Token       string  `json:"token"`
+	Labels      string  `json:"labels"`
+	ContainerID string  `json:"container_id,omitempty"`
+	ErrorCount  int     `json:"error_count"`
 	CPULimit    float64 `json:"cpu_limit,omitempty"`    // in cores, e.g., 0.5
 	MemoryLimit int64   `json:"memory_limit,omitempty"` // in MB, e.g., 512
 }
 
+// Config represents the application configuration.
 type Config struct {
 	Runners map[string]*Runner `json:"runners"`
 }
 
 var (
-	ConfigDir  string
+	// ConfigDir is the directory where configuration is stored.
+	ConfigDir string
+	// ConfigFile is the path to the configuration file.
 	ConfigFile string
 )
 
@@ -36,6 +40,7 @@ func init() {
 	ConfigFile = filepath.Join(ConfigDir, "config.json")
 }
 
+// LoadConfig loads the configuration from disk.
 func LoadConfig() (*Config, error) {
 	if _, err := os.Stat(ConfigFile); os.IsNotExist(err) {
 		return &Config{Runners: make(map[string]*Runner)}, nil
@@ -58,6 +63,7 @@ func LoadConfig() (*Config, error) {
 	return &cfg, nil
 }
 
+// SaveConfig saves the configuration to disk.
 func SaveConfig(cfg *Config) error {
 	if err := os.MkdirAll(ConfigDir, 0755); err != nil {
 		return err
@@ -71,6 +77,7 @@ func SaveConfig(cfg *Config) error {
 	return os.WriteFile(ConfigFile, data, 0644)
 }
 
+// AddRunner adds a new runner to the configuration.
 func AddRunner(runner *Runner) error {
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -85,6 +92,7 @@ func AddRunner(runner *Runner) error {
 	return SaveConfig(cfg)
 }
 
+// RemoveRunner removes a runner from the configuration.
 func RemoveRunner(name string) error {
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -99,6 +107,7 @@ func RemoveRunner(name string) error {
 	return SaveConfig(cfg)
 }
 
+// UpdateRunner updates an existing runner in the configuration.
 func UpdateRunner(runner *Runner) error {
 	cfg, err := LoadConfig()
 	if err != nil {

@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
@@ -18,12 +17,12 @@ import (
 )
 
 type mockDockerClient struct {
-	client.CommonAPIClient
+	client.APIClient
 	containerCreateFunc  func(config *container.Config, hostConfig *container.HostConfig) (container.CreateResponse, error)
 	containerStartFunc   func(containerID string) error
 	containerStopFunc    func(containerID string) error
 	containerRemoveFunc  func(containerID string) error
-	containerInspectFunc func(containerID string) (types.ContainerJSON, error)
+	containerInspectFunc func(containerID string) (container.InspectResponse, error)
 	imagePullFunc        func(ref string) (io.ReadCloser, error)
 	containerUpdateFunc  func() error
 	containerTopFunc     func() error
@@ -57,11 +56,11 @@ func (m *mockDockerClient) ContainerRemove(ctx context.Context, containerID stri
 	return nil
 }
 
-func (m *mockDockerClient) ContainerInspect(ctx context.Context, containerID string) (types.ContainerJSON, error) {
+func (m *mockDockerClient) ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error) {
 	if m.containerInspectFunc != nil {
 		return m.containerInspectFunc(containerID)
 	}
-	return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{State: &types.ContainerState{Running: true}}}, nil
+	return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{State: &container.State{Running: true}}}, nil
 }
 
 func (m *mockDockerClient) ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error) {
@@ -71,18 +70,18 @@ func (m *mockDockerClient) ImagePull(ctx context.Context, ref string, options im
 	return io.NopCloser(strings.NewReader(`{"status":"Done"}`)), nil
 }
 
-func (m *mockDockerClient) ContainerUpdate(ctx context.Context, containerID string, updateConfig container.UpdateConfig) (container.ContainerUpdateOKBody, error) {
+func (m *mockDockerClient) ContainerUpdate(ctx context.Context, containerID string, updateConfig container.UpdateConfig) (container.UpdateResponse, error) {
 	if m.containerUpdateFunc != nil {
-		return container.ContainerUpdateOKBody{}, m.containerUpdateFunc()
+		return container.UpdateResponse{}, m.containerUpdateFunc()
 	}
-	return container.ContainerUpdateOKBody{}, nil
+	return container.UpdateResponse{}, nil
 }
 
-func (m *mockDockerClient) ContainerTop(ctx context.Context, containerID string, arguments []string) (container.ContainerTopOKBody, error) {
+func (m *mockDockerClient) ContainerTop(ctx context.Context, containerID string, arguments []string) (container.TopResponse, error) {
 	if m.containerTopFunc != nil {
-		return container.ContainerTopOKBody{}, m.containerTopFunc()
+		return container.TopResponse{}, m.containerTopFunc()
 	}
-	return container.ContainerTopOKBody{Processes: [][]string{{"123", "Runner.Worker"}}}, nil
+	return container.TopResponse{Processes: [][]string{{"123", "Runner.Worker"}}}, nil
 }
 
 func TestPullImage(t *testing.T) {
@@ -144,7 +143,10 @@ func TestStopRunner(t *testing.T) {
 		},
 	}
 	mgr := &Manager{cli: mock}
-	mgr.StopRunner(context.Background(), "id")
+	err := mgr.StopRunner(context.Background(), "id")
+	if err != nil {
+		t.Fatalf("StopRunner failed: %v", err)
+	}
 	if !called {
 		t.Error("ContainerStop was not called")
 	}
@@ -159,7 +161,10 @@ func TestRemoveRunner(t *testing.T) {
 		},
 	}
 	mgr := &Manager{cli: mock}
-	mgr.RemoveRunner(context.Background(), "id")
+	err := mgr.RemoveRunner(context.Background(), "id")
+	if err != nil {
+		t.Fatalf("RemoveRunner failed: %v", err)
+	}
 	if !called {
 		t.Error("ContainerRemove was not called")
 	}
@@ -174,7 +179,10 @@ func TestResumeRunner(t *testing.T) {
 		},
 	}
 	mgr := &Manager{cli: mock}
-	mgr.ResumeRunner(context.Background(), "id")
+	err := mgr.ResumeRunner(context.Background(), "id")
+	if err != nil {
+		t.Fatalf("ResumeRunner failed: %v", err)
+	}
 	if !called {
 		t.Error("ResumeRunner (ContainerStart) was not called")
 	}
@@ -208,9 +216,9 @@ func TestUpdateResources(t *testing.T) {
 
 func TestGetRunnerInfo(t *testing.T) {
 	mock := &mockDockerClient{
-		containerInspectFunc: func(id string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-				State: &types.ContainerState{
+		containerInspectFunc: func(id string) (container.InspectResponse, error) {
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{
 					Running:   true,
 					StartedAt: time.Now().Add(-10 * time.Minute).Format(time.RFC3339Nano),
 				},
@@ -230,9 +238,9 @@ func TestGetRunnerInfo(t *testing.T) {
 func TestGetRunnerInfoExtra(t *testing.T) {
 	// Test when ContainerTop fails
 	mock := &mockDockerClient{
-		containerInspectFunc: func(id string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-				State: &types.ContainerState{Running: true, StartedAt: time.Now().Format(time.RFC3339Nano)},
+		containerInspectFunc: func(id string) (container.InspectResponse, error) {
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true, StartedAt: time.Now().Format(time.RFC3339Nano)},
 			}}, nil
 		},
 		containerTopFunc: func() error { return fmt.Errorf("top error") },
@@ -276,8 +284,8 @@ func TestStartRunnerFailures(t *testing.T) {
 
 func TestDockerErrors(t *testing.T) {
 	mgr := &Manager{cli: &mockDockerClient{
-		containerInspectFunc: func(id string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{}, fmt.Errorf("Error response from daemon: No such container")
+		containerInspectFunc: func(id string) (container.InspectResponse, error) {
+			return container.InspectResponse{}, fmt.Errorf("Error response from daemon: No such container")
 		},
 	}}
 
@@ -294,8 +302,8 @@ func TestDockerErrors(t *testing.T) {
 	}
 
 	// Test empty container IDs
-	mgr.StopRunner(context.Background(), "")
-	mgr.RemoveRunner(context.Background(), "")
+	_ = mgr.StopRunner(context.Background(), "")
+	_ = mgr.RemoveRunner(context.Background(), "")
 	running, _ = mgr.IsRunning(context.Background(), "")
 	if running {
 		t.Error("empty ID should not be running")

@@ -131,32 +131,53 @@ func (m *Manager) IsRunning(ctx context.Context, containerID string) (bool, erro
 }
 
 type RunnerInfo struct {
-	IsRunning bool
-	Uptime    string
-	ExitCode  int
+	IsRunning      bool
+	Uptime         string
+	ExitCode       int
+	InternalStatus string // "Idle" or "Working"
 }
 
 func (m *Manager) GetRunnerInfo(ctx context.Context, containerID string) (*RunnerInfo, error) {
 	if containerID == "" {
-		return &RunnerInfo{IsRunning: false, Uptime: "-", ExitCode: 0}, nil
+		return &RunnerInfo{IsRunning: false, Uptime: "-", ExitCode: 0, InternalStatus: "-"}, nil
 	}
 	inspect, err := m.cli.ContainerInspect(ctx, containerID)
 	if err != nil {
 		if strings.Contains(err.Error(), "No such container") {
-			return &RunnerInfo{IsRunning: false, Uptime: "-", ExitCode: 0}, nil
+			return &RunnerInfo{IsRunning: false, Uptime: "-", ExitCode: 0, InternalStatus: "-"}, nil
 		}
 		return nil, err
 	}
 
 	info := &RunnerInfo{
-		IsRunning: inspect.State.Running,
-		ExitCode:  inspect.State.ExitCode,
+		IsRunning:      inspect.State.Running,
+		ExitCode:       inspect.State.ExitCode,
+		InternalStatus: "-",
 	}
 
 	if inspect.State.Running {
 		startedAt, _ := time.Parse(time.RFC3339Nano, inspect.State.StartedAt)
 		duration := time.Since(startedAt).Round(time.Second)
 		info.Uptime = duration.String()
+
+		// Check internal status by looking at processes
+		top, err := m.cli.ContainerTop(ctx, containerID, nil)
+		if err == nil {
+			info.InternalStatus = "Idle"
+			for _, proc := range top.Processes {
+				// The process list contains rows of strings. 
+				// We look for "Runner.Worker" in any of the fields (usually the command field)
+				for _, field := range proc {
+					if strings.Contains(field, "Runner.Worker") {
+						info.InternalStatus = "Working"
+						break
+					}
+				}
+				if info.InternalStatus == "Working" {
+					break
+				}
+			}
+		}
 	} else {
 		info.Uptime = "Stopped"
 	}

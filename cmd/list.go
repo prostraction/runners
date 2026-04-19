@@ -49,9 +49,9 @@ var listCmd = &cobra.Command{
 
 			status := "Stopped"
 			if info.IsRunning {
-				status = "Running"
+				status = fmt.Sprintf("Running (%s)", info.InternalStatus)
 			} else if info.ExitCode != 0 {
-				status = fmt.Sprintf("Exited(%d)", info.ExitCode)
+				status = fmt.Sprintf("Exited (%d)", info.ExitCode)
 			}
 
 			cpuLimit := "-"

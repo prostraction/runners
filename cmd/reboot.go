@@ -16,9 +16,10 @@ var (
 )
 
 var rebootCmd = &cobra.Command{
-	Use:   "reboot [name]",
-	Short: "Reboot (restart) one or all GitHub runners",
-	Args:  cobra.MaximumNArgs(1),
+	Use:     "reboot [name]",
+	Aliases: []string{"restart"},
+	Short:   "Reboot (restart) one or all GitHub runners",
+	Args:    cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg, err := config.LoadConfig()
 		if err != nil {
@@ -44,9 +45,15 @@ var rebootCmd = &cobra.Command{
 			for _, name := range names {
 				runner := cfg.Runners[name]
 				fmt.Printf("Rebooting runner '%s'...\n", name)
+				
+				// Stop and remove existing container
 				if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
 					log.Printf("Warning during stop for '%s': %v", name, err)
 				}
+				if err := dm.RemoveRunner(ctx, runner.ContainerID); err != nil {
+					log.Printf("Warning during removal for '%s': %v", name, err)
+				}
+
 				if err := dm.StartRunner(ctx, runner); err != nil {
 					log.Printf("Error: failed to restart runner '%s': %v", name, err)
 					continue
@@ -71,9 +78,12 @@ var rebootCmd = &cobra.Command{
 
 		fmt.Printf("Rebooting runner '%s'...\n", name)
 		
-		// Stop if running
+		// Stop and remove if running
 		if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
 			log.Printf("Warning during stop: %v", err)
+		}
+		if err := dm.RemoveRunner(ctx, runner.ContainerID); err != nil {
+			log.Printf("Warning during removal: %v", err)
 		}
 
 		// Start again

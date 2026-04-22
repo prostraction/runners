@@ -3,8 +3,8 @@ package docker
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,6 +12,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/jsonmessage"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/moby/term"
 	"github.com/runners/config"
 )
@@ -51,7 +52,7 @@ func (m *Manager) PullImage(ctx context.Context) error {
 // StartRunner creates and starts a new runner container.
 func (m *Manager) StartRunner(ctx context.Context, runner *config.Runner) error {
 	// Prepare persistent storage directory
-	dataDir := filepath.Join(config.ConfigDir, "data", runner.Name)
+	dataDir := config.DataDir(runner.Name)
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
@@ -77,6 +78,9 @@ func (m *Manager) StartRunner(ctx context.Context, runner *config.Runner) error 
 		Binds: []string{
 			"/var/run/docker.sock:/var/run/docker.sock", // Mount host docker socket
 			fmt.Sprintf("%s:/runner/data", dataDir),     // Persist runner configuration
+		},
+		RestartPolicy: container.RestartPolicy{
+			Name: container.RestartPolicyUnlessStopped,
 		},
 	}
 
@@ -162,7 +166,7 @@ type RunnerInfo struct {
 	IsRunning      bool
 	Uptime         string
 	ExitCode       int
-	InternalStatus string // "Idle" or "Working"
+	InternalStatus string // "Idle", "Working", "Not Connected", or "-"
 }
 
 // GetRunnerInfo retrieves detailed status for a runner.
@@ -193,22 +197,32 @@ func (m *Manager) GetRunnerInfo(ctx context.Context, containerID string) (*Runne
 			info.Uptime = "Unknown"
 		}
 
-		// Check internal status by looking at processes
+		// Check internal status by looking at processes.
+		// Runner.Worker = a job is actively running.
+		// Runner.Listener = the runner is connected to GitHub and waiting for jobs.
+		// Neither = the runner container is up but not registered/connected (e.g. stale
+		// credentials, or runner was deleted from GitHub).
 		top, err := m.cli.ContainerTop(ctx, containerID, nil)
 		if err == nil {
-			info.InternalStatus = "Idle"
+			hasListener := false
+			hasWorker := false
 			for _, proc := range top.Processes {
-				// The process list contains rows of strings. 
-				// We look for "Runner.Worker" in any of the fields (usually the command field)
 				for _, field := range proc {
 					if strings.Contains(field, "Runner.Worker") {
-						info.InternalStatus = "Working"
-						break
+						hasWorker = true
+					}
+					if strings.Contains(field, "Runner.Listener") {
+						hasListener = true
 					}
 				}
-				if info.InternalStatus == "Working" {
-					break
-				}
+			}
+			switch {
+			case hasWorker:
+				info.InternalStatus = "Working"
+			case hasListener:
+				info.InternalStatus = "Idle"
+			default:
+				info.InternalStatus = "Not Connected"
 			}
 		}
 	} else {
@@ -216,6 +230,93 @@ func (m *Manager) GetRunnerInfo(ctx context.Context, containerID string) (*Runne
 	}
 
 	return info, nil
+}
+
+// EnsureRestartPolicy applies the unless-stopped restart policy to an existing
+// container. This lets Docker auto-restart the runner after a host reboot or
+// daemon restart, so runners do not get stuck in "Exited (143)" after the PC
+// is turned off and on again.
+func (m *Manager) EnsureRestartPolicy(ctx context.Context, containerID string) error {
+	if containerID == "" {
+		return nil
+	}
+	_, err := m.cli.ContainerUpdate(ctx, containerID, container.UpdateConfig{
+		RestartPolicy: container.RestartPolicy{
+			Name: container.RestartPolicyUnlessStopped,
+		},
+	})
+	if err != nil && strings.Contains(err.Error(), "No such container") {
+		return nil
+	}
+	return err
+}
+
+// VerifyStartup waits until the runner container has a live Runner.Listener
+// process, meaning registration with GitHub succeeded and the runner is ready
+// to accept jobs. Returns an error if the container crashes or fails to
+// connect within the given timeout.
+func (m *Manager) VerifyStartup(ctx context.Context, containerID string, timeout time.Duration) error {
+	if containerID == "" {
+		return fmt.Errorf("empty container ID")
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		inspect, err := m.cli.ContainerInspect(ctx, containerID)
+		if err != nil {
+			return fmt.Errorf("failed to inspect container: %w", err)
+		}
+		if !inspect.State.Running {
+			return fmt.Errorf("container exited with code %d", inspect.State.ExitCode)
+		}
+
+		top, err := m.cli.ContainerTop(ctx, containerID, nil)
+		if err == nil {
+			for _, proc := range top.Processes {
+				for _, field := range proc {
+					if strings.Contains(field, "Runner.Listener") {
+						return nil
+					}
+				}
+			}
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("runner did not connect to GitHub within %s (check token and registration)", timeout)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(1 * time.Second):
+		}
+	}
+}
+
+// StreamLogs writes container logs to the given writers. If follow is true,
+// the call blocks until the context is cancelled or the container stops. The
+// tail argument is a line count or "all".
+func (m *Manager) StreamLogs(ctx context.Context, containerID string, follow bool, tail string, stdout, stderr io.Writer) error {
+	if containerID == "" {
+		return fmt.Errorf("runner has no container id (not yet started)")
+	}
+	reader, err := m.cli.ContainerLogs(ctx, containerID, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Follow:     follow,
+		Tail:       tail,
+		Timestamps: false,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to fetch container logs: %w", err)
+	}
+	defer func() {
+		_ = reader.Close()
+	}()
+	if _, err := stdcopy.StdCopy(stdout, stderr, reader); err != nil && err != io.EOF {
+		return err
+	}
+	return nil
 }
 
 // UpdateResources dynamically updates container resource limits.

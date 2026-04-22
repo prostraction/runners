@@ -40,6 +40,22 @@ func init() {
 	ConfigFile = filepath.Join(ConfigDir, "config.json")
 }
 
+// DataDir returns the persistent data directory path for a runner.
+func DataDir(name string) string {
+	return filepath.Join(ConfigDir, "data", name)
+}
+
+// DataDirExists reports whether a runner's persistent data directory exists.
+func DataDirExists(name string) bool {
+	_, err := os.Stat(DataDir(name))
+	return err == nil
+}
+
+// RemoveDataDir deletes a runner's persistent data directory.
+func RemoveDataDir(name string) error {
+	return os.RemoveAll(DataDir(name))
+}
+
 // LoadConfig loads the configuration from disk.
 func LoadConfig() (*Config, error) {
 	if _, err := os.Stat(ConfigFile); os.IsNotExist(err) {

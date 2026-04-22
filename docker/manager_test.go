@@ -24,8 +24,10 @@ type mockDockerClient struct {
 	containerRemoveFunc  func(containerID string) error
 	containerInspectFunc func(containerID string) (container.InspectResponse, error)
 	imagePullFunc        func(ref string) (io.ReadCloser, error)
-	containerUpdateFunc  func() error
+	containerUpdateFunc  func(cfg container.UpdateConfig) error
 	containerTopFunc     func() error
+	containerTopRespFunc func() (container.TopResponse, error)
+	containerLogsFunc    func(opts container.LogsOptions) (io.ReadCloser, error)
 }
 
 func (m *mockDockerClient) ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error) {
@@ -72,12 +74,22 @@ func (m *mockDockerClient) ImagePull(ctx context.Context, ref string, options im
 
 func (m *mockDockerClient) ContainerUpdate(ctx context.Context, containerID string, updateConfig container.UpdateConfig) (container.UpdateResponse, error) {
 	if m.containerUpdateFunc != nil {
-		return container.UpdateResponse{}, m.containerUpdateFunc()
+		return container.UpdateResponse{}, m.containerUpdateFunc(updateConfig)
 	}
 	return container.UpdateResponse{}, nil
 }
 
+func (m *mockDockerClient) ContainerLogs(ctx context.Context, containerID string, options container.LogsOptions) (io.ReadCloser, error) {
+	if m.containerLogsFunc != nil {
+		return m.containerLogsFunc(options)
+	}
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
 func (m *mockDockerClient) ContainerTop(ctx context.Context, containerID string, arguments []string) (container.TopResponse, error) {
+	if m.containerTopRespFunc != nil {
+		return m.containerTopRespFunc()
+	}
 	if m.containerTopFunc != nil {
 		return container.TopResponse{}, m.containerTopFunc()
 	}
@@ -141,6 +153,10 @@ func TestStartRunner(t *testing.T) {
 			}
 			if !foundDataBind {
 				t.Error("missing runner data bind")
+			}
+
+			if h.RestartPolicy.Name != container.RestartPolicyUnlessStopped {
+				t.Errorf("expected RestartPolicy unless-stopped, got %q", h.RestartPolicy.Name)
 			}
 
 			return container.CreateResponse{ID: "test-id"}, nil
@@ -237,7 +253,7 @@ func TestUpdateResources(t *testing.T) {
 
 	// 2. Failure
 	mockErr := &mockDockerClient{
-		containerUpdateFunc: func() error { return fmt.Errorf("update fail") },
+		containerUpdateFunc: func(container.UpdateConfig) error { return fmt.Errorf("update fail") },
 	}
 	mgrErr := &Manager{cli: mockErr}
 	if err := mgrErr.UpdateResources(context.Background(), "id", 1, 1); err == nil {
@@ -310,6 +326,180 @@ func TestStartRunnerFailures(t *testing.T) {
 	mgrStartFail := &Manager{cli: mockStartFail}
 	if err := mgrStartFail.StartRunner(ctx, runner); err == nil {
 		t.Error("expected error when start fails")
+	}
+}
+
+func TestGetRunnerInfoNotConnected(t *testing.T) {
+	// Container running but neither Runner.Listener nor Runner.Worker present
+	// means the runner is not actually connected to GitHub (e.g. stale creds
+	// after the runner was removed from the GitHub side).
+	mock := &mockDockerClient{
+		containerInspectFunc: func(id string) (container.InspectResponse, error) {
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true, StartedAt: time.Now().Format(time.RFC3339Nano)},
+			}}, nil
+		},
+		containerTopRespFunc: func() (container.TopResponse, error) {
+			return container.TopResponse{Processes: [][]string{{"1", "sh"}, {"2", "some-other-process"}}}, nil
+		},
+	}
+	mgr := &Manager{cli: mock}
+	info, err := mgr.GetRunnerInfo(context.Background(), "id")
+	if err != nil {
+		t.Fatalf("GetRunnerInfo failed: %v", err)
+	}
+	if info.InternalStatus != "Not Connected" {
+		t.Errorf("expected 'Not Connected', got %q", info.InternalStatus)
+	}
+}
+
+func TestGetRunnerInfoIdle(t *testing.T) {
+	// Runner.Listener running but no Worker = Idle.
+	mock := &mockDockerClient{
+		containerInspectFunc: func(id string) (container.InspectResponse, error) {
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true, StartedAt: time.Now().Format(time.RFC3339Nano)},
+			}}, nil
+		},
+		containerTopRespFunc: func() (container.TopResponse, error) {
+			return container.TopResponse{Processes: [][]string{{"1", "Runner.Listener"}}}, nil
+		},
+	}
+	mgr := &Manager{cli: mock}
+	info, _ := mgr.GetRunnerInfo(context.Background(), "id")
+	if info.InternalStatus != "Idle" {
+		t.Errorf("expected 'Idle', got %q", info.InternalStatus)
+	}
+}
+
+func TestEnsureRestartPolicy(t *testing.T) {
+	var gotPolicy string
+	mock := &mockDockerClient{
+		containerUpdateFunc: func(cfg container.UpdateConfig) error {
+			gotPolicy = string(cfg.RestartPolicy.Name)
+			return nil
+		},
+	}
+	mgr := &Manager{cli: mock}
+	if err := mgr.EnsureRestartPolicy(context.Background(), "id"); err != nil {
+		t.Fatalf("EnsureRestartPolicy failed: %v", err)
+	}
+	if gotPolicy != string(container.RestartPolicyUnlessStopped) {
+		t.Errorf("expected unless-stopped, got %q", gotPolicy)
+	}
+
+	// Empty ID is a no-op.
+	if err := mgr.EnsureRestartPolicy(context.Background(), ""); err != nil {
+		t.Errorf("expected no error for empty id, got %v", err)
+	}
+
+	// "No such container" is swallowed (cleanup path).
+	mockMissing := &mockDockerClient{
+		containerUpdateFunc: func(cfg container.UpdateConfig) error {
+			return fmt.Errorf("Error response from daemon: No such container: id")
+		},
+	}
+	mgrMissing := &Manager{cli: mockMissing}
+	if err := mgrMissing.EnsureRestartPolicy(context.Background(), "id"); err != nil {
+		t.Errorf("expected missing container error to be swallowed, got %v", err)
+	}
+
+	// Other errors propagate.
+	mockErr := &mockDockerClient{
+		containerUpdateFunc: func(cfg container.UpdateConfig) error {
+			return fmt.Errorf("boom")
+		},
+	}
+	mgrErr := &Manager{cli: mockErr}
+	if err := mgrErr.EnsureRestartPolicy(context.Background(), "id"); err == nil {
+		t.Error("expected error to propagate")
+	}
+}
+
+func TestVerifyStartup(t *testing.T) {
+	// Success: listener shows up on first poll.
+	mockOK := &mockDockerClient{
+		containerInspectFunc: func(id string) (container.InspectResponse, error) {
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true},
+			}}, nil
+		},
+		containerTopRespFunc: func() (container.TopResponse, error) {
+			return container.TopResponse{Processes: [][]string{{"1", "Runner.Listener"}}}, nil
+		},
+	}
+	mgrOK := &Manager{cli: mockOK}
+	if err := mgrOK.VerifyStartup(context.Background(), "id", 2*time.Second); err != nil {
+		t.Errorf("VerifyStartup should succeed when Listener is present: %v", err)
+	}
+
+	// Failure: container crashed (not running, non-zero exit).
+	mockCrash := &mockDockerClient{
+		containerInspectFunc: func(id string) (container.InspectResponse, error) {
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: false, ExitCode: 1},
+			}}, nil
+		},
+	}
+	mgrCrash := &Manager{cli: mockCrash}
+	if err := mgrCrash.VerifyStartup(context.Background(), "id", 2*time.Second); err == nil {
+		t.Error("expected error when container exited")
+	}
+
+	// Failure: running but no Listener within timeout.
+	mockNoListener := &mockDockerClient{
+		containerInspectFunc: func(id string) (container.InspectResponse, error) {
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true},
+			}}, nil
+		},
+		containerTopRespFunc: func() (container.TopResponse, error) {
+			return container.TopResponse{Processes: [][]string{{"1", "sh"}}}, nil
+		},
+	}
+	mgrNoListener := &Manager{cli: mockNoListener}
+	if err := mgrNoListener.VerifyStartup(context.Background(), "id", 100*time.Millisecond); err == nil {
+		t.Error("expected timeout error when Listener never appears")
+	}
+
+	// Failure: empty container ID.
+	if err := (&Manager{cli: &mockDockerClient{}}).VerifyStartup(context.Background(), "", time.Second); err == nil {
+		t.Error("expected error for empty container ID")
+	}
+}
+
+func TestStreamLogs(t *testing.T) {
+	// Empty container ID is rejected.
+	mgr := &Manager{cli: &mockDockerClient{}}
+	if err := mgr.StreamLogs(context.Background(), "", false, "100", io.Discard, io.Discard); err == nil {
+		t.Error("expected error for empty container id")
+	}
+
+	// Options are forwarded and an empty stream returns no error.
+	var gotOpts container.LogsOptions
+	mock := &mockDockerClient{
+		containerLogsFunc: func(opts container.LogsOptions) (io.ReadCloser, error) {
+			gotOpts = opts
+			return io.NopCloser(strings.NewReader("")), nil
+		},
+	}
+	mgrOK := &Manager{cli: mock}
+	if err := mgrOK.StreamLogs(context.Background(), "id", true, "50", io.Discard, io.Discard); err != nil {
+		t.Fatalf("StreamLogs failed: %v", err)
+	}
+	if !gotOpts.ShowStdout || !gotOpts.ShowStderr || !gotOpts.Follow || gotOpts.Tail != "50" {
+		t.Errorf("unexpected options forwarded: %+v", gotOpts)
+	}
+
+	// API error propagates.
+	mockErr := &mockDockerClient{
+		containerLogsFunc: func(opts container.LogsOptions) (io.ReadCloser, error) {
+			return nil, fmt.Errorf("logs error")
+		},
+	}
+	mgrErr := &Manager{cli: mockErr}
+	if err := mgrErr.StreamLogs(context.Background(), "id", false, "100", io.Discard, io.Discard); err == nil {
+		t.Error("expected error when ContainerLogs fails")
 	}
 }
 

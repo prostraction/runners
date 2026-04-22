@@ -115,6 +115,45 @@ func TestConfigFlow(t *testing.T) {
 	}
 }
 
+func TestDataDirHelpers(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "runners-data")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	ConfigDir = tmpDir
+
+	name := "dd-test"
+	dir := DataDir(name)
+	if filepath.Dir(dir) != filepath.Join(tmpDir, "data") {
+		t.Errorf("unexpected DataDir path: %s", dir)
+	}
+
+	if DataDirExists(name) {
+		t.Error("expected DataDirExists to be false before creation")
+	}
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("failed to create data dir: %v", err)
+	}
+	if !DataDirExists(name) {
+		t.Error("expected DataDirExists to be true after creation")
+	}
+
+	if err := RemoveDataDir(name); err != nil {
+		t.Errorf("RemoveDataDir failed: %v", err)
+	}
+	if DataDirExists(name) {
+		t.Error("expected DataDirExists to be false after removal")
+	}
+
+	// Removing a non-existent dir should not error.
+	if err := RemoveDataDir(name); err != nil {
+		t.Errorf("RemoveDataDir on missing dir should not error: %v", err)
+	}
+}
+
 func TestSaveConfigError(t *testing.T) {
 	// Try to save to a file that is actually a directory (will fail on WriteFile)
 	tmpDir, _ := os.MkdirTemp("", "runners-fail")

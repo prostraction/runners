@@ -27,9 +27,9 @@ var updateCmd = &cobra.Command{
 			return fmt.Errorf("failed to load config: %w", err)
 		}
 
-		// Check if any changes were specified
+		// Check if any changes were specified (mem/ram are normalized to memory).
 		updated := false
-		if cmd.Flags().Changed("cpu") || cmd.Flags().Changed("memory") || cmd.Flags().Changed("mem") || cmd.Flags().Changed("ram") {
+		if cmd.Flags().Changed("cpu") || cmd.Flags().Changed("memory") {
 			updated = true
 		}
 
@@ -60,7 +60,7 @@ var updateCmd = &cobra.Command{
 				if cmd.Flags().Changed("cpu") {
 					runner.CPULimit = updateCPU
 				}
-				if cmd.Flags().Changed("memory") || cmd.Flags().Changed("mem") || cmd.Flags().Changed("ram") {
+				if cmd.Flags().Changed("memory") {
 					runner.MemoryLimit = updateMemory
 				}
 
@@ -93,7 +93,7 @@ var updateCmd = &cobra.Command{
 		if cmd.Flags().Changed("cpu") {
 			runner.CPULimit = updateCPU
 		}
-		if cmd.Flags().Changed("memory") || cmd.Flags().Changed("mem") || cmd.Flags().Changed("ram") {
+		if cmd.Flags().Changed("memory") {
 			runner.MemoryLimit = updateMemory
 		}
 
@@ -119,8 +119,7 @@ var updateCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(updateCmd)
 	updateCmd.Flags().Float64Var(&updateCPU, "cpu", 0, "New CPU limit in cores")
-	updateCmd.Flags().Int64Var(&updateMemory, "memory", 0, "New Memory limit in MB")
-	updateCmd.Flags().Int64Var(&updateMemory, "mem", 0, "Alias for --memory")
-	updateCmd.Flags().Int64Var(&updateMemory, "ram", 0, "Alias for --memory")
+	updateCmd.Flags().Int64Var(&updateMemory, "memory", 0, "New Memory limit in MB — aliases: --mem, --ram")
 	updateCmd.Flags().BoolVarP(&updateAll, "all", "a", false, "Update all runners")
+	updateCmd.Flags().SetNormalizeFunc(normalizeMemoryAliases)
 }

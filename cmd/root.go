@@ -5,7 +5,18 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
+
+// normalizeMemoryAliases maps --mem and --ram onto --memory so all three spellings
+// hit the same flag. Attach with flags.SetNormalizeFunc(normalizeMemoryAliases).
+func normalizeMemoryAliases(f *pflag.FlagSet, name string) pflag.NormalizedName {
+	switch name {
+	case "mem", "ram":
+		return pflag.NormalizedName("memory")
+	}
+	return pflag.NormalizedName(name)
+}
 
 var rootCmd = &cobra.Command{
 	Use:   "runners",

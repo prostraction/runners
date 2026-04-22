@@ -55,6 +55,9 @@ var startCmd = &cobra.Command{
 				// Try to resume existing container first to preserve registration
 				if runner.ContainerID != "" {
 					if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
+						if err := dm.EnsureRestartPolicy(ctx, runner.ContainerID); err != nil {
+							log.Printf("Warning: failed to set restart policy for '%s': %v", name, err)
+						}
 						fmt.Printf("Runner '%s' resumed.\n", name)
 						continue
 					}
@@ -96,6 +99,9 @@ var startCmd = &cobra.Command{
 		
 		if runner.ContainerID != "" {
 			if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
+				if err := dm.EnsureRestartPolicy(ctx, runner.ContainerID); err != nil {
+					log.Printf("Warning: failed to set restart policy: %v", err)
+				}
 				fmt.Printf("Runner '%s' resumed.\n", name)
 				return nil
 			}

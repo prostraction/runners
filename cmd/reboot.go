@@ -53,6 +53,9 @@ var rebootCmd = &cobra.Command{
 
 				// Try to resume first
 				if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
+					if err := dm.EnsureRestartPolicy(ctx, runner.ContainerID); err != nil {
+						log.Printf("Warning: failed to set restart policy for '%s': %v", name, err)
+					}
 					continue
 				}
 
@@ -89,6 +92,9 @@ var rebootCmd = &cobra.Command{
 
 		// Try to resume
 		if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
+			if err := dm.EnsureRestartPolicy(ctx, runner.ContainerID); err != nil {
+				log.Printf("Warning: failed to set restart policy: %v", err)
+			}
 			fmt.Printf("Successfully rebooted runner '%s' (resumed).\n", name)
 			return nil
 		}

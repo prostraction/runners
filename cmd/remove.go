@@ -66,9 +66,14 @@ var removeCmd = &cobra.Command{
 
 			if err := config.RemoveRunner(name); err != nil {
 				log.Printf("Error: failed to remove '%s' from config: %v", name, err)
-			} else {
-				fmt.Printf("Successfully removed runner '%s'.\n", name)
+				continue
 			}
+
+			if err := config.RemoveDataDir(name); err != nil {
+				log.Printf("Warning: failed to remove data directory for '%s': %v", name, err)
+			}
+
+			fmt.Printf("Successfully removed runner '%s'.\n", name)
 		}
 
 		return nil

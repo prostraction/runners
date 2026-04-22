@@ -72,6 +72,15 @@ func (m *Manager) StartRunner(ctx context.Context, runner *config.Runner) error 
 
 	containerName := fmt.Sprintf("gh-runner-%s", runner.Name)
 
+	// Proactively remove any container with the same name left over from a
+	// previous failed run. Without this, ContainerCreate below fails with
+	// "name already in use" and the tool looks broken on retry.
+	if err := m.cli.ContainerRemove(ctx, containerName, container.RemoveOptions{Force: true}); err != nil &&
+		!strings.Contains(err.Error(), "No such container") {
+		// Not fatal — surface the underlying create error if there is one below.
+		fmt.Printf("Warning: could not clean stale container %q: %v\n", containerName, err)
+	}
+
 	hostConfig := &container.HostConfig{
 		AutoRemove: false,
 		Privileged: true, // Required for some DinD operations
@@ -103,6 +112,9 @@ func (m *Manager) StartRunner(ctx context.Context, runner *config.Runner) error 
 	}
 
 	if err := m.cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		// Remove the created-but-never-started container, otherwise its name
+		// stays taken and future StartRunner calls fail with a name conflict.
+		_ = m.cli.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
 		return fmt.Errorf("failed to start container: %w", err)
 	}
 
@@ -125,7 +137,7 @@ func (m *Manager) StopRunner(ctx context.Context, containerID string) error {
 	return nil
 }
 
-// RemoveRunner removes a container.
+// RemoveRunner removes a container by ID.
 func (m *Manager) RemoveRunner(ctx context.Context, containerID string) error {
 	if containerID == "" {
 		return nil
@@ -138,6 +150,18 @@ func (m *Manager) RemoveRunner(ctx context.Context, containerID string) error {
 		return fmt.Errorf("failed to remove container: %w", err)
 	}
 
+	return nil
+}
+
+// RemoveContainerByName force-removes a container by its runner-derived name
+// (gh-runner-<name>). Swallows "No such container" so callers can use it as a
+// best-effort cleanup for orphans.
+func (m *Manager) RemoveContainerByName(ctx context.Context, name string) error {
+	containerName := fmt.Sprintf("gh-runner-%s", name)
+	err := m.cli.ContainerRemove(ctx, containerName, container.RemoveOptions{Force: true})
+	if err != nil && !strings.Contains(err.Error(), "No such container") {
+		return fmt.Errorf("failed to remove container %q: %w", containerName, err)
+	}
 	return nil
 }
 
@@ -291,6 +315,66 @@ func (m *Manager) VerifyStartup(ctx context.Context, containerID string, timeout
 		case <-time.After(1 * time.Second):
 		}
 	}
+}
+
+// purgeDataDirTimeout bounds cleanup container lifetime so rm/add can't hang
+// indefinitely if the docker daemon wedges.
+const purgeDataDirTimeout = 30 * time.Second
+
+// PurgeDataDir removes a runner's persistent data directory. Files inside
+// were created by the runner container running as root, so a plain
+// os.RemoveAll from the host user fails with "permission denied" on bind
+// mounts. Instead we spin up a short-lived container that shares root's UID
+// namespace, have it wipe /data from the inside, then drop the now-empty
+// directory from the host.
+func (m *Manager) PurgeDataDir(ctx context.Context, name string) error {
+	dataDir := config.DataDir(name)
+	if _, err := os.Stat(dataDir); os.IsNotExist(err) {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, purgeDataDirTimeout)
+	defer cancel()
+
+	cfg := &container.Config{
+		Image:      RunnerImage,
+		Entrypoint: []string{"sh", "-c"},
+		Cmd:        []string{"find /data -mindepth 1 -delete"},
+	}
+	hostCfg := &container.HostConfig{
+		AutoRemove: true,
+		Binds:      []string{fmt.Sprintf("%s:/data", dataDir)},
+	}
+
+	resp, createErr := m.cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "")
+	if createErr != nil {
+		// Fall back to host-side removal. It will usually fail on root-owned
+		// files, but try anyway so we at least propagate a clear error.
+		if err := os.RemoveAll(dataDir); err != nil {
+			return fmt.Errorf("failed to create cleanup container (%v); host removal also failed: %w", createErr, err)
+		}
+		return nil
+	}
+
+	if err := m.cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		_ = m.cli.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
+		return fmt.Errorf("failed to start cleanup container: %w", err)
+	}
+
+	waitCh, errCh := m.cli.ContainerWait(ctx, resp.ID, container.WaitConditionRemoved)
+	select {
+	case <-waitCh:
+	case err := <-errCh:
+		// AutoRemove can race with Wait and yield "No such container" — that's
+		// actually the success path, so swallow it.
+		if err != nil && !strings.Contains(err.Error(), "No such container") {
+			return fmt.Errorf("cleanup container wait failed: %w", err)
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	return os.RemoveAll(dataDir)
 }
 
 // StreamLogs writes container logs to the given writers. If follow is true,

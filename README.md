@@ -46,6 +46,7 @@ This compiles the binary and moves it to `/usr/local/bin/runners`.
 | :--- | :--- | :---: |
 | `add` | Register and start a new GitHub runner | No |
 | `list` | List all runners with status, uptime, and limits | N/A |
+| `log` | Print a log from runner's container (Docker syntax) | N/A |
 | `start` | Start one or all stopped runners | Yes |
 | `stop` | Stop one or all running runners | Yes |
 | `reboot` | Restart one or all runners | Yes |

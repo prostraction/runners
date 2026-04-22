@@ -79,7 +79,9 @@ func LoadConfig() (*Config, error) {
 	return &cfg, nil
 }
 
-// SaveConfig saves the configuration to disk.
+// SaveConfig atomically saves the configuration to disk. It writes to a tmp
+// file next to the target and renames, so a crash mid-write cannot corrupt
+// the live config.json and brick the tool.
 func SaveConfig(cfg *Config) error {
 	if err := os.MkdirAll(ConfigDir, 0755); err != nil {
 		return err
@@ -90,7 +92,28 @@ func SaveConfig(cfg *Config) error {
 		return err
 	}
 
-	return os.WriteFile(ConfigFile, data, 0644)
+	tmp, err := os.CreateTemp(ConfigDir, "config-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	// If anything below fails, make sure we don't leave a stray tmp file.
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, ConfigFile)
 }
 
 // AddRunner adds a new runner to the configuration.

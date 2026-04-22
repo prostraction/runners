@@ -12,8 +12,11 @@ import (
 )
 
 // verifyStartupTimeout is how long we wait for a newly added runner to register
-// with GitHub and start its listener process.
-const verifyStartupTimeout = 30 * time.Second
+// with GitHub and start its listener process. First-time registration on a slow
+// host (or when the myoung34 image is still warming up) can take ~20-30s, so
+// 60s gives comfortable headroom without blocking the user forever on a real
+// failure.
+const verifyStartupTimeout = 60 * time.Second
 
 var (
 	addName   string
@@ -64,7 +67,7 @@ var addCmd = &cobra.Command{
 
 		if err := dm.StartRunner(ctx, runner); err != nil {
 			_ = config.RemoveRunner(runner.Name)
-			_ = config.RemoveDataDir(runner.Name)
+			_ = dm.PurgeDataDir(ctx, runner.Name)
 			return fmt.Errorf("failed to start runner container: %w", err)
 		}
 
@@ -79,7 +82,7 @@ var addCmd = &cobra.Command{
 			_ = dm.StopRunner(ctx, runner.ContainerID)
 			_ = dm.RemoveRunner(ctx, runner.ContainerID)
 			_ = config.RemoveRunner(runner.Name)
-			_ = config.RemoveDataDir(runner.Name)
+			_ = dm.PurgeDataDir(ctx, runner.Name)
 			return fmt.Errorf("runner failed to register: %w", err)
 		}
 

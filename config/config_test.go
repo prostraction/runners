@@ -155,15 +155,58 @@ func TestDataDirHelpers(t *testing.T) {
 }
 
 func TestSaveConfigError(t *testing.T) {
-	// Try to save to a file that is actually a directory (will fail on WriteFile)
+	// Point ConfigFile at something that os.Rename cannot overwrite — an
+	// existing non-empty directory — so the atomic-save rename step errors.
 	tmpDir, _ := os.MkdirTemp("", "runners-fail")
 	defer os.RemoveAll(tmpDir)
-	
+
 	ConfigDir = tmpDir
-	ConfigFile = tmpDir // ConfigFile points to a directory
-	
-	err := SaveConfig(&Config{})
-	if err == nil {
-		t.Error("expected error saving when ConfigFile is a directory, got nil")
+	blockingDir := filepath.Join(tmpDir, "blocking")
+	if err := os.MkdirAll(filepath.Join(blockingDir, "child"), 0755); err != nil {
+		t.Fatalf("failed to create blocking dir: %v", err)
+	}
+	ConfigFile = blockingDir
+
+	if err := SaveConfig(&Config{}); err == nil {
+		t.Error("expected error saving when ConfigFile is a non-empty directory, got nil")
+	}
+}
+
+func TestSaveConfigAtomic(t *testing.T) {
+	// Verify the live config file is never replaced by a half-written tmp
+	// file after a successful save, and that no .tmp stragglers remain.
+	tmpDir, err := os.MkdirTemp("", "runners-atomic")
+	if err != nil {
+		t.Fatalf("mkdirtemp: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	ConfigDir = tmpDir
+	ConfigFile = filepath.Join(tmpDir, "config.json")
+
+	if err := SaveConfig(&Config{Runners: map[string]*Runner{"a": {Name: "a"}}}); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	for _, e := range entries {
+		if e.Name() == "config.json" {
+			continue
+		}
+		t.Errorf("unexpected leftover file after atomic save: %s", e.Name())
+	}
+
+	// Re-saving should overwrite cleanly.
+	if err := SaveConfig(&Config{Runners: map[string]*Runner{"a": {Name: "a"}, "b": {Name: "b"}}}); err != nil {
+		t.Fatalf("second SaveConfig: %v", err)
+	}
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.Runners) != 2 {
+		t.Errorf("expected 2 runners after overwrite, got %d", len(cfg.Runners))
 	}
 }

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -48,13 +49,25 @@ var logCmd = &cobra.Command{
 			// Cancel the stream on Ctrl-C so the reader unblocks cleanly.
 			sig := make(chan os.Signal, 1)
 			signal.Notify(sig, os.Interrupt)
+			defer signal.Stop(sig)
 			go func() {
-				<-sig
-				cancel()
+				select {
+				case <-sig:
+					cancel()
+				case <-ctx.Done():
+				}
 			}()
 		}
 
-		return dm.StreamLogs(ctx, runner.ContainerID, logFollow, logTail, os.Stdout, os.Stderr)
+		err = dm.StreamLogs(ctx, runner.ContainerID, logFollow, logTail, os.Stdout, os.Stderr)
+		// Ctrl-C during follow cancels ctx, which in turn aborts the HTTP
+		// stream and StdCopy returns some non-nil error (context.Canceled,
+		// "unexpected EOF", etc.). Any of those is a clean user-initiated
+		// exit, not a failure to report.
+		if err != nil && (ctx.Err() != nil || errors.Is(err, context.Canceled)) {
+			return nil
+		}
+		return err
 	},
 }
 

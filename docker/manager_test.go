@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +30,7 @@ type mockDockerClient struct {
 	containerTopFunc     func() error
 	containerTopRespFunc func() (container.TopResponse, error)
 	containerLogsFunc    func(opts container.LogsOptions) (io.ReadCloser, error)
+	containerWaitFunc    func() (<-chan container.WaitResponse, <-chan error)
 }
 
 func (m *mockDockerClient) ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error) {
@@ -77,6 +80,16 @@ func (m *mockDockerClient) ContainerUpdate(ctx context.Context, containerID stri
 		return container.UpdateResponse{}, m.containerUpdateFunc(updateConfig)
 	}
 	return container.UpdateResponse{}, nil
+}
+
+func (m *mockDockerClient) ContainerWait(ctx context.Context, containerID string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error) {
+	if m.containerWaitFunc != nil {
+		return m.containerWaitFunc()
+	}
+	okCh := make(chan container.WaitResponse, 1)
+	okCh <- container.WaitResponse{}
+	errCh := make(chan error, 1)
+	return okCh, errCh
 }
 
 func (m *mockDockerClient) ContainerLogs(ctx context.Context, containerID string, options container.LogsOptions) (io.ReadCloser, error) {
@@ -314,18 +327,54 @@ func TestStartRunnerFailures(t *testing.T) {
 		t.Error("expected error when creation fails")
 	}
 
-	// 2. Start fails
+	// 2. Start fails — the created-but-never-started container must be
+	// force-removed so its name doesn't linger.
+	removeCalls := []string{}
 	mockStartFail := &mockDockerClient{
 		containerCreateFunc: func(c *container.Config, h *container.HostConfig) (container.CreateResponse, error) {
-			return container.CreateResponse{ID: "id"}, nil
+			return container.CreateResponse{ID: "create-id"}, nil
 		},
 		containerStartFunc: func(id string) error {
 			return fmt.Errorf("start error")
+		},
+		containerRemoveFunc: func(id string) error {
+			removeCalls = append(removeCalls, id)
+			return nil
 		},
 	}
 	mgrStartFail := &Manager{cli: mockStartFail}
 	if err := mgrStartFail.StartRunner(ctx, runner); err == nil {
 		t.Error("expected error when start fails")
+	}
+	if !slices.Contains(removeCalls, "create-id") {
+		t.Errorf("expected cleanup of created container 'create-id' after start fail; remove calls = %v", removeCalls)
+	}
+}
+
+func TestRemoveContainerByName(t *testing.T) {
+	var lastID string
+	mock := &mockDockerClient{
+		containerRemoveFunc: func(id string) error {
+			lastID = id
+			return nil
+		},
+	}
+	mgr := &Manager{cli: mock}
+	if err := mgr.RemoveContainerByName(context.Background(), "foo"); err != nil {
+		t.Fatalf("RemoveContainerByName: %v", err)
+	}
+	if lastID != "gh-runner-foo" {
+		t.Errorf("expected gh-runner-foo, got %q", lastID)
+	}
+
+	// "No such container" is swallowed.
+	mockMissing := &mockDockerClient{
+		containerRemoveFunc: func(id string) error {
+			return fmt.Errorf("Error: No such container: gh-runner-foo")
+		},
+	}
+	if err := (&Manager{cli: mockMissing}).RemoveContainerByName(context.Background(), "foo"); err != nil {
+		t.Errorf("missing container should be swallowed, got %v", err)
 	}
 }
 
@@ -465,6 +514,109 @@ func TestVerifyStartup(t *testing.T) {
 	// Failure: empty container ID.
 	if err := (&Manager{cli: &mockDockerClient{}}).VerifyStartup(context.Background(), "", time.Second); err == nil {
 		t.Error("expected error for empty container ID")
+	}
+}
+
+func TestPurgeDataDir(t *testing.T) {
+	// Missing data dir: no-op, no container API is called.
+	tmpDir, err := os.MkdirTemp("", "runners-purge")
+	if err != nil {
+		t.Fatalf("mkdirtemp: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	origConfigDir := config.ConfigDir
+	config.ConfigDir = tmpDir
+	defer func() { config.ConfigDir = origConfigDir }()
+
+	createCalled := false
+	mock := &mockDockerClient{
+		containerCreateFunc: func(c *container.Config, h *container.HostConfig) (container.CreateResponse, error) {
+			createCalled = true
+			return container.CreateResponse{ID: "cleanup-id"}, nil
+		},
+	}
+	mgr := &Manager{cli: mock}
+	if err := mgr.PurgeDataDir(context.Background(), "nope"); err != nil {
+		t.Errorf("expected no error for missing data dir, got %v", err)
+	}
+	if createCalled {
+		t.Error("did not expect cleanup container when data dir is missing")
+	}
+
+	// Existing data dir: create cleanup container with the right bind + entrypoint,
+	// then host-side remove the (now-empty) dir.
+	dataDir := config.DataDir("rn")
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		t.Fatalf("failed to create data dir: %v", err)
+	}
+
+	var gotBinds []string
+	var gotEntrypoint []string
+	var gotCmd []string
+	mock2 := &mockDockerClient{
+		containerCreateFunc: func(c *container.Config, h *container.HostConfig) (container.CreateResponse, error) {
+			gotBinds = h.Binds
+			gotEntrypoint = c.Entrypoint
+			gotCmd = c.Cmd
+			if !h.AutoRemove {
+				t.Error("expected AutoRemove=true on cleanup container")
+			}
+			return container.CreateResponse{ID: "cleanup-id"}, nil
+		},
+	}
+	mgr2 := &Manager{cli: mock2}
+	if err := mgr2.PurgeDataDir(context.Background(), "rn"); err != nil {
+		t.Fatalf("PurgeDataDir failed: %v", err)
+	}
+
+	if len(gotBinds) != 1 || !strings.Contains(gotBinds[0], ":/data") {
+		t.Errorf("unexpected binds: %v", gotBinds)
+	}
+	if len(gotEntrypoint) == 0 || gotEntrypoint[0] != "sh" {
+		t.Errorf("expected sh entrypoint, got %v", gotEntrypoint)
+	}
+	if len(gotCmd) == 0 || !strings.Contains(gotCmd[0], "find /data") {
+		t.Errorf("expected find-based cleanup, got %v", gotCmd)
+	}
+	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
+		t.Errorf("expected dataDir to be removed, stat err = %v", err)
+	}
+
+	// ContainerCreate error falls back to host removal.
+	dataDir2 := config.DataDir("fallback")
+	if err := os.MkdirAll(dataDir2, 0755); err != nil {
+		t.Fatalf("failed to create data dir: %v", err)
+	}
+	mockFail := &mockDockerClient{
+		containerCreateFunc: func(c *container.Config, h *container.HostConfig) (container.CreateResponse, error) {
+			return container.CreateResponse{}, fmt.Errorf("create fail")
+		},
+	}
+	mgrFail := &Manager{cli: mockFail}
+	if err := mgrFail.PurgeDataDir(context.Background(), "fallback"); err != nil {
+		t.Errorf("expected host-side fallback to succeed: %v", err)
+	}
+	if _, err := os.Stat(dataDir2); !os.IsNotExist(err) {
+		t.Errorf("expected fallback dataDir to be removed, stat err = %v", err)
+	}
+
+	// "No such container" from Wait (AutoRemove race) is treated as success.
+	dataDir3 := config.DataDir("race")
+	if err := os.MkdirAll(dataDir3, 0755); err != nil {
+		t.Fatalf("failed to create data dir: %v", err)
+	}
+	mockRace := &mockDockerClient{
+		containerWaitFunc: func() (<-chan container.WaitResponse, <-chan error) {
+			errCh := make(chan error, 1)
+			errCh <- fmt.Errorf("Error response from daemon: No such container: cleanup-id")
+			okCh := make(chan container.WaitResponse)
+			return okCh, errCh
+		},
+	}
+	mgrRace := &Manager{cli: mockRace}
+	if err := mgrRace.PurgeDataDir(context.Background(), "race"); err != nil {
+		t.Errorf("AutoRemove-race should be swallowed, got: %v", err)
 	}
 }
 

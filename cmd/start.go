@@ -43,17 +43,16 @@ var startCmd = &cobra.Command{
 
 			for _, name := range names {
 				runner := cfg.Runners[name]
-				
-				isRunning, _ := dm.IsRunning(ctx, runner.ContainerID)
-				if isRunning {
+
+				info, _ := dm.GetRunnerInfo(ctx, runner.ContainerID)
+				if info != nil && info.IsRunning {
 					fmt.Printf("Runner '%s' is already running.\n", name)
 					continue
 				}
 
 				fmt.Printf("Starting runner '%s'...\n", name)
-				
-				// Try to resume existing container first to preserve registration
-				if runner.ContainerID != "" {
+
+				if runner.ContainerID != "" && info != nil && info.ExitCode == 0 {
 					if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
 						if err := dm.EnsureRestartPolicy(ctx, runner.ContainerID); err != nil {
 							log.Printf("Warning: failed to set restart policy for '%s': %v", name, err)
@@ -63,8 +62,7 @@ var startCmd = &cobra.Command{
 					}
 				}
 
-				// Fallback to creating a new container (requires valid token)
-				fmt.Printf("Container not found or failed to resume. Re-creating runner '%s'...\n", name)
+				fmt.Printf("Re-creating runner '%s'...\n", name)
 				_ = dm.RemoveRunner(ctx, runner.ContainerID)
 
 				if err := dm.StartRunner(ctx, runner); err != nil {
@@ -89,15 +87,15 @@ var startCmd = &cobra.Command{
 			return fmt.Errorf("runner '%s' not found", name)
 		}
 
-		isRunning, _ := dm.IsRunning(ctx, runner.ContainerID)
-		if isRunning {
+		info, _ := dm.GetRunnerInfo(ctx, runner.ContainerID)
+		if info != nil && info.IsRunning {
 			fmt.Printf("Runner '%s' is already running.\n", name)
 			return nil
 		}
 
 		fmt.Printf("Starting runner '%s'...\n", name)
-		
-		if runner.ContainerID != "" {
+
+		if runner.ContainerID != "" && info != nil && info.ExitCode == 0 {
 			if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
 				if err := dm.EnsureRestartPolicy(ctx, runner.ContainerID); err != nil {
 					log.Printf("Warning: failed to set restart policy: %v", err)
@@ -107,7 +105,7 @@ var startCmd = &cobra.Command{
 			}
 		}
 
-		fmt.Printf("Container not found or failed to resume. Re-creating runner '%s'...\n", name)
+		fmt.Printf("Re-creating runner '%s'...\n", name)
 		_ = dm.RemoveRunner(ctx, runner.ContainerID)
 
 		if err := dm.StartRunner(ctx, runner); err != nil {

@@ -105,6 +105,7 @@ func (m *Manager) StartRunner(ctx context.Context, runner *config.Runner) error 
 	resp, err := m.cli.ContainerCreate(ctx, &container.Config{
 		Image: RunnerImage,
 		Env:   env,
+		Cmd:   []string{"./run.sh"},
 	}, hostConfig, nil, nil, containerName)
 
 	if err != nil {

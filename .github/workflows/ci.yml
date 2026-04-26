@@ -2,32 +2,138 @@ name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
+
+# Default to read-only token. Each job can grant more if needed; none of ours
+# do. This is the strongest single mitigation for compromised workflow code.
+permissions:
+  contents: read
+
+# Cancel in-progress runs on the same ref to save runner time.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GO_VERSION: "1.25"
+  GOFLAGS: "-mod=readonly"
+  # Local module/tool caches inside the workspace so the self-hosted runner
+  # doesn't accumulate state in $HOME between repos.
+  GOPATH: ${{ github.workspace }}/.go
+  GOMODCACHE: ${{ github.workspace }}/.go/pkg/mod
+  GOCACHE: ${{ github.workspace }}/.go/cache
+
+# Security gate: any job that runs on the self-hosted runner MUST start with
+# this `if` so that pull requests from forks are skipped. Forks can otherwise
+# rewrite this very file in their PR and execute arbitrary code on our runner.
+#
+#  * github.event_name == 'push'                — only direct pushes to main
+#                                                 (which require commit access)
+#  * head.repo.full_name == github.repository   — PR from a branch in *this*
+#                                                 repository, not a fork
+#
+# Combined with the repo-level setting "Require approval for outside
+# collaborators" (Settings → Actions → General), this means a fork's PR can
+# never reach the self-hosted runner without an explicit maintainer click.
 
 jobs:
-  build-and-test:
-    runs-on: self-hosted
+  fork-pr-notice:
+    # Visible status entry that explains why CI is skipped for fork PRs.
+    name: Fork PR · notice
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Explain skip
+        run: |
+          echo "::notice::CI on the self-hosted runner is intentionally skipped for fork PRs."
+          echo "::notice::A maintainer can re-run this PR by checking it out into an internal branch."
 
-      - name: Set up Go
+  go-test:
+    name: Go · test
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Don't leave the GITHUB_TOKEN in the repo's git config after checkout.
+          persist-credentials: false
+          # Avoid leaking secrets from a clone left over by a previous run.
+          clean: true
+
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      - name: Verify modules
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Build
+        run: go build ./...
 
       - name: Vet
         run: go vet ./...
 
-      - name: Build
-        run: go build -v ./...
+      - name: Test (with coverage)
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
-      - name: Test
-        run: go test -v -cover ./...
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -20
 
-      - name: Lint
-        run: go run github.com/golangci/golangci-lint/cmd/golangci-lint@latest run --timeout=5m
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: coverage.out
+          retention-days: 7
 
+  go-lint:
+    name: Go · lint
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          clean: true
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: gofmt check
+        run: |
+          fmt_out=$(gofmt -l -s $(go list -f '{{.Dir}}' ./...))
+          if [ -n "$fmt_out" ]; then
+            echo "::error::gofmt would reformat:"
+            echo "$fmt_out"
+            exit 1
+          fi
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.62
+          args: --timeout=5m
+          skip-cache: false

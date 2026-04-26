@@ -45,22 +45,25 @@ var rebootCmd = &cobra.Command{
 			for _, name := range names {
 				runner := cfg.Runners[name]
 				fmt.Printf("Rebooting runner '%s'...\n", name)
-				
-				// Stop existing container
+
+				infoBefore, _ := dm.GetRunnerInfo(ctx, runner.ContainerID)
+				healthy := infoBefore != nil && (infoBefore.IsRunning || infoBefore.ExitCode == 0)
+
 				if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
 					log.Printf("Warning during stop for '%s': %v", name, err)
 				}
 
-				// Try to resume first
-				if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
-					if err := dm.EnsureRestartPolicy(ctx, runner.ContainerID); err != nil {
-						log.Printf("Warning: failed to set restart policy for '%s': %v", name, err)
+				if healthy {
+					if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
+						if err := dm.EnsureRestartPolicy(ctx, runner.ContainerID); err != nil {
+							log.Printf("Warning: failed to set restart policy for '%s': %v", name, err)
+						}
+						continue
 					}
-					continue
 				}
 
-				// If resume fails, it means container is missing, so we must recreate
-				fmt.Printf("Container for '%s' missing. Re-creating...\n", name)
+				fmt.Printf("Re-creating runner '%s'...\n", name)
+				_ = dm.RemoveRunner(ctx, runner.ContainerID)
 				if err := dm.StartRunner(ctx, runner); err != nil {
 					log.Printf("Error: failed to restart runner '%s': %v", name, err)
 					continue
@@ -84,23 +87,25 @@ var rebootCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Rebooting runner '%s'...\n", name)
-		
-		// Stop if running
+
+		infoBefore, _ := dm.GetRunnerInfo(ctx, runner.ContainerID)
+		healthy := infoBefore != nil && (infoBefore.IsRunning || infoBefore.ExitCode == 0)
+
 		if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
 			log.Printf("Warning during stop: %v", err)
 		}
 
-		// Try to resume
-		if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
-			if err := dm.EnsureRestartPolicy(ctx, runner.ContainerID); err != nil {
-				log.Printf("Warning: failed to set restart policy: %v", err)
+		if healthy {
+			if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
+				if err := dm.EnsureRestartPolicy(ctx, runner.ContainerID); err != nil {
+					log.Printf("Warning: failed to set restart policy: %v", err)
+				}
+				fmt.Printf("Successfully rebooted runner '%s' (resumed).\n", name)
+				return nil
 			}
-			fmt.Printf("Successfully rebooted runner '%s' (resumed).\n", name)
-			return nil
 		}
 
-		// Fallback to recreate
-		fmt.Printf("Container for '%s' missing. Re-creating...\n", name)
+		fmt.Printf("Re-creating runner '%s'...\n", name)
 		_ = dm.RemoveRunner(ctx, runner.ContainerID)
 		if err := dm.StartRunner(ctx, runner); err != nil {
 			return fmt.Errorf("failed to start runner: %w", err)

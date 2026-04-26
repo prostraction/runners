@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sort"
 
 	"github.com/runners/config"
 	"github.com/runners/docker"
@@ -16,14 +15,18 @@ var (
 )
 
 var rebootCmd = &cobra.Command{
-	Use:     "reboot [name]",
+	Use:     "reboot [name...]",
 	Aliases: []string{"restart"},
-	Short:   "Reboot (restart) one or all GitHub runners",
-	Args:    cobra.MaximumNArgs(1),
+	Short:   "Reboot (restart) one or more (or all) GitHub runners",
+	Args:    cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		if !rebootAll && len(args) == 0 {
+			return fmt.Errorf("please specify one or more runner names or use --all")
 		}
 
 		dm, err := docker.NewManager()
@@ -33,89 +36,43 @@ var rebootCmd = &cobra.Command{
 
 		ctx := context.Background()
 
-		if rebootAll {
-			fmt.Println("Rebooting all runners...")
-			
-			names := make([]string, 0, len(cfg.Runners))
-			for name := range cfg.Runners {
-				names = append(names, name)
+		names := resolveTargets(cfg, args, rebootAll)
+
+		for _, name := range names {
+			runner, exists := cfg.Runners[name]
+			if !exists {
+				log.Printf("Runner '%s' not found, skipping", name)
+				continue
 			}
-			sort.Strings(names)
+			fmt.Printf("Rebooting runner '%s'...\n", name)
 
-			for _, name := range names {
-				runner := cfg.Runners[name]
-				fmt.Printf("Rebooting runner '%s'...\n", name)
+			infoBefore, _ := dm.GetRunnerInfo(ctx, runner.ContainerID)
+			healthy := infoBefore != nil && (infoBefore.IsRunning || infoBefore.ExitCode == 0)
 
-				infoBefore, _ := dm.GetRunnerInfo(ctx, runner.ContainerID)
-				healthy := infoBefore != nil && (infoBefore.IsRunning || infoBefore.ExitCode == 0)
+			if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
+				log.Printf("Warning during stop for '%s': %v", name, err)
+			}
 
-				if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
-					log.Printf("Warning during stop for '%s': %v", name, err)
-				}
-
-				if healthy {
-					if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
-						if err := dm.EnsureRestartPolicy(ctx, runner.ContainerID); err != nil {
-							log.Printf("Warning: failed to set restart policy for '%s': %v", name, err)
-						}
-						continue
+			if healthy {
+				if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
+					if err := dm.EnsureRestartPolicy(ctx, runner.ContainerID); err != nil {
+						log.Printf("Warning: failed to set restart policy for '%s': %v", name, err)
 					}
-				}
-
-				fmt.Printf("Re-creating runner '%s'...\n", name)
-				_ = dm.RemoveRunner(ctx, runner.ContainerID)
-				if err := dm.StartRunner(ctx, runner); err != nil {
-					log.Printf("Error: failed to restart runner '%s': %v", name, err)
 					continue
 				}
-				if err := config.UpdateRunner(runner); err != nil {
-					log.Printf("Warning: failed to save container ID for '%s' to config: %v", name, err)
-				}
 			}
-			fmt.Println("All runners rebooted.")
-			return nil
-		}
 
-		if len(args) == 0 {
-			return fmt.Errorf("please specify a runner name or use --all")
-		}
-
-		name := args[0]
-		runner, exists := cfg.Runners[name]
-		if !exists {
-			return fmt.Errorf("runner '%s' not found", name)
-		}
-
-		fmt.Printf("Rebooting runner '%s'...\n", name)
-
-		infoBefore, _ := dm.GetRunnerInfo(ctx, runner.ContainerID)
-		healthy := infoBefore != nil && (infoBefore.IsRunning || infoBefore.ExitCode == 0)
-
-		if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
-			log.Printf("Warning during stop: %v", err)
-		}
-
-		if healthy {
-			if err := dm.ResumeRunner(ctx, runner.ContainerID); err == nil {
-				if err := dm.EnsureRestartPolicy(ctx, runner.ContainerID); err != nil {
-					log.Printf("Warning: failed to set restart policy: %v", err)
-				}
-				fmt.Printf("Successfully rebooted runner '%s' (resumed).\n", name)
-				return nil
+			fmt.Printf("Re-creating runner '%s'...\n", name)
+			_ = dm.RemoveRunner(ctx, runner.ContainerID)
+			if err := dm.StartRunner(ctx, runner); err != nil {
+				log.Printf("Error: failed to restart runner '%s': %v", name, err)
+				continue
+			}
+			if err := config.UpdateRunner(runner); err != nil {
+				log.Printf("Warning: failed to save container ID for '%s' to config: %v", name, err)
 			}
 		}
 
-		fmt.Printf("Re-creating runner '%s'...\n", name)
-		_ = dm.RemoveRunner(ctx, runner.ContainerID)
-		if err := dm.StartRunner(ctx, runner); err != nil {
-			return fmt.Errorf("failed to start runner: %w", err)
-		}
-
-		if err := config.UpdateRunner(runner); err != nil {
-			log.Printf("Warning: failed to save container ID to config: %v", err)
-		}
-
-		fmt.Printf("Successfully rebooted runner '%s'.\n", name)
 		return nil
 	},
 }

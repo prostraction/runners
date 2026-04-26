@@ -142,12 +142,12 @@ func TestStartRunner(t *testing.T) {
 
 			// Check environment variables
 			expectedEnv := map[string]bool{
-				"REPO_URL=https://github.com/test/repo":    true,
-				"RUNNER_NAME=test":                         true,
-				"RUNNER_TOKEN=token":                       true,
+				"REPO_URL=https://github.com/test/repo":            true,
+				"RUNNER_NAME=test":                                 true,
+				"RUNNER_TOKEN=token":                               true,
 				"CONFIGURED_ACTIONS_RUNNER_FILES_DIR=/runner/data": true,
-				"DISABLE_AUTOMATIC_DEREGISTRATION=true":    true,
-				"CONFIG_OPTS=--replace":                    true,
+				"DISABLE_AUTOMATIC_DEREGISTRATION=true":            true,
+				"CONFIG_OPTS=--replace":                            true,
 			}
 			for _, env := range c.Env {
 				delete(expectedEnv, env)

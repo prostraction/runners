@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [master]
   pull_request:
-    branches: [main, master]
+    branches: [master]
 
 permissions:
   contents: read
@@ -25,20 +25,14 @@ env:
   GOCACHE: ${{ github.workspace }}/.go/cache
 
 jobs:
-  fork-pr-notice:
-    name: Fork PR · notice
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 1
-    steps:
-      - name: Explain skip
-        run: |
-          echo "::notice::CI on the self-hosted runner is intentionally skipped for fork PRs."
-          echo "::notice::A maintainer can re-run this PR by checking it out into an internal branch."
-
   go-test:
     name: Go · test
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      github.event_name == 'push' || (
+        github.event.pull_request.head.repo.full_name == github.repository
+        && github.actor != 'dependabot[bot]'
+        && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
+      )
     runs-on: [self-hosted, linux]
     timeout-minutes: 15
     permissions:
@@ -83,7 +77,12 @@ jobs:
 
   go-lint:
     name: Go · lint
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      github.event_name == 'push' || (
+        github.event.pull_request.head.repo.full_name == github.repository
+        && github.actor != 'dependabot[bot]'
+        && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
+      )
     runs-on: [self-hosted, linux]
     timeout-minutes: 10
     permissions:

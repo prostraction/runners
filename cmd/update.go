@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sort"
 
 	"github.com/runners/config"
 	"github.com/runners/docker"
@@ -18,24 +17,22 @@ var (
 )
 
 var updateCmd = &cobra.Command{
-	Use:   "update [name]",
-	Short: "Update resource limits for one or all runners",
-	Args:  cobra.MaximumNArgs(1),
+	Use:   "update [name...]",
+	Short: "Update resource limits for one or more (or all) runners",
+	Args:  cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
 
-		// Check if any changes were specified (mem/ram are normalized to memory).
-		updated := false
-		if cmd.Flags().Changed("cpu") || cmd.Flags().Changed("memory") {
-			updated = true
-		}
-
-		if !updated {
+		if !cmd.Flags().Changed("cpu") && !cmd.Flags().Changed("memory") {
 			fmt.Println("No changes specified. Use --cpu or --memory to update limits.")
 			return nil
+		}
+
+		if !updateAll && len(args) == 0 {
+			return fmt.Errorf("please specify one or more runner names or use --all")
 		}
 
 		dm, err := docker.NewManager()
@@ -45,77 +42,38 @@ var updateCmd = &cobra.Command{
 
 		ctx := context.Background()
 
-		if updateAll {
-			fmt.Println("Updating limits for all runners...")
-			names := make([]string, 0, len(cfg.Runners))
-			for name := range cfg.Runners {
-				names = append(names, name)
+		names := resolveTargets(cfg, args, updateAll)
+
+		for _, name := range names {
+			runner, exists := cfg.Runners[name]
+			if !exists {
+				log.Printf("Runner '%s' not found, skipping", name)
+				continue
 			}
-			sort.Strings(names)
+			fmt.Printf("Updating runner '%s'...\n", name)
 
-			for _, name := range names {
-				runner := cfg.Runners[name]
-				fmt.Printf("Updating runner '%s'...\n", name)
+			if cmd.Flags().Changed("cpu") {
+				runner.CPULimit = updateCPU
+			}
+			if cmd.Flags().Changed("memory") {
+				runner.MemoryLimit = updateMemory
+			}
 
-				if cmd.Flags().Changed("cpu") {
-					runner.CPULimit = updateCPU
-				}
-				if cmd.Flags().Changed("memory") {
-					runner.MemoryLimit = updateMemory
-				}
-
-				if runner.ContainerID != "" {
-					if err := dm.UpdateResources(ctx, runner.ContainerID, runner.CPULimit, runner.MemoryLimit); err != nil {
-						log.Printf("Warning: failed to update runner '%s' container: %v", name, err)
-					}
-				}
-
-				if err := config.UpdateRunner(runner); err != nil {
-					log.Printf("Error: failed to update '%s' in config: %v", name, err)
+			if runner.ContainerID != "" {
+				if err := dm.UpdateResources(ctx, runner.ContainerID, runner.CPULimit, runner.MemoryLimit); err != nil {
+					log.Printf("Warning: failed to update runner '%s' container: %v", name, err)
 				}
 			}
-			fmt.Println("All runners updated.")
-			return nil
-		}
 
-		if len(args) == 0 {
-			return fmt.Errorf("please specify a runner name or use --all")
-		}
-
-		name := args[0]
-		runner, exists := cfg.Runners[name]
-		if !exists {
-			return fmt.Errorf("runner '%s' not found", name)
-		}
-
-		fmt.Printf("Updating limits for runner '%s'...\n", name)
-
-		if cmd.Flags().Changed("cpu") {
-			runner.CPULimit = updateCPU
-		}
-		if cmd.Flags().Changed("memory") {
-			runner.MemoryLimit = updateMemory
-		}
-
-		// Apply to Docker container if it exists
-		if runner.ContainerID != "" {
-			if err := dm.UpdateResources(ctx, runner.ContainerID, runner.CPULimit, runner.MemoryLimit); err != nil {
-				log.Printf("Warning: failed to update running container resources: %v", err)
-				fmt.Println("The new limits will be applied the next time the runner starts.")
-			} else {
-				fmt.Println("Successfully updated running container limits.")
+			if err := config.UpdateRunner(runner); err != nil {
+				log.Printf("Error: failed to update '%s' in config: %v", name, err)
 			}
 		}
 
-		// Save to config
-		if err := config.UpdateRunner(runner); err != nil {
-			return fmt.Errorf("failed to save updated config: %w", err)
-		}
-
-		fmt.Printf("Runner '%s' configuration updated.\n", name)
 		return nil
 	},
 }
+
 func init() {
 	rootCmd.AddCommand(updateCmd)
 	updateCmd.Flags().Float64Var(&updateCPU, "cpu", 0, "New CPU limit in cores")

@@ -16,13 +16,17 @@ var (
 )
 
 var stopCmd = &cobra.Command{
-	Use:   "stop [name]",
-	Short: "Stop one or all running GitHub runners",
-	Args:  cobra.MaximumNArgs(1),
+	Use:   "stop [name...]",
+	Short: "Stop one or more (or all) running GitHub runners",
+	Args:  cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		if !stopAll && len(args) == 0 {
+			return fmt.Errorf("please specify one or more runner names or use --all")
 		}
 
 		dm, err := docker.NewManager()
@@ -32,44 +36,37 @@ var stopCmd = &cobra.Command{
 
 		ctx := context.Background()
 
-		if stopAll {
-			fmt.Println("Stopping all runners...")
-			
-			names := make([]string, 0, len(cfg.Runners))
-			for name := range cfg.Runners {
-				names = append(names, name)
+		names := resolveTargets(cfg, args, stopAll)
+
+		for _, name := range names {
+			runner, exists := cfg.Runners[name]
+			if !exists {
+				log.Printf("Runner '%s' not found, skipping", name)
+				continue
 			}
-			sort.Strings(names)
-
-			for _, name := range names {
-				runner := cfg.Runners[name]
-				fmt.Printf("Stopping runner '%s'...\n", name)
-				if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
-					log.Printf("Warning: failed to stop runner '%s': %v", name, err)
-				}
+			fmt.Printf("Stopping runner '%s'...\n", name)
+			if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
+				log.Printf("Warning: failed to stop runner '%s': %v", name, err)
 			}
-			fmt.Println("All runners stopped.")
-			return nil
 		}
 
-		if len(args) == 0 {
-			return fmt.Errorf("please specify a runner name or use --all")
-		}
-
-		name := args[0]
-		runner, exists := cfg.Runners[name]
-		if !exists {
-			return fmt.Errorf("runner '%s' not found", name)
-		}
-
-		fmt.Printf("Stopping runner '%s'...\n", name)
-		if err := dm.StopRunner(ctx, runner.ContainerID); err != nil {
-			return fmt.Errorf("failed to stop runner: %w", err)
-		}
-
-		fmt.Printf("Successfully stopped runner '%s'.\n", name)
 		return nil
 	},
+}
+
+// resolveTargets returns the list of runner names to act on. When all is true
+// every configured runner is returned in sorted order; otherwise the names
+// the user passed on the command line are returned verbatim.
+func resolveTargets(cfg *config.Config, args []string, all bool) []string {
+	if !all {
+		return args
+	}
+	names := make([]string, 0, len(cfg.Runners))
+	for name := range cfg.Runners {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func init() {

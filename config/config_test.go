@@ -12,7 +12,7 @@ func TestConfigFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	ConfigDir = tmpDir
 	ConfigFile = filepath.Join(tmpDir, "config.json")
@@ -120,7 +120,7 @@ func TestDataDirHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	ConfigDir = tmpDir
 
@@ -158,7 +158,7 @@ func TestSaveConfigError(t *testing.T) {
 	// Point ConfigFile at something that os.Rename cannot overwrite — an
 	// existing non-empty directory — so the atomic-save rename step errors.
 	tmpDir, _ := os.MkdirTemp("", "runners-fail")
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	ConfigDir = tmpDir
 	blockingDir := filepath.Join(tmpDir, "blocking")
@@ -179,7 +179,7 @@ func TestSaveConfigAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mkdirtemp: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	ConfigDir = tmpDir
 	ConfigFile = filepath.Join(tmpDir, "config.json")

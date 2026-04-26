@@ -37,13 +37,13 @@ var listCmd = &cobra.Command{
 		sort.Strings(names)
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "NAME\tURL\tLABELS\tSTATUS\tUPTIME\tERRORS\tCPU\tRAM")
+		_, _ = fmt.Fprintln(w, "NAME\tURL\tLABELS\tSTATUS\tUPTIME\tERRORS\tCPU\tRAM")
 
 		for _, name := range names {
 			r := cfg.Runners[name]
 			info, err := dm.GetRunnerInfo(ctx, r.ContainerID)
 			if err != nil {
-				fmt.Fprintf(w, "%s\t%s\t%s\tError\t-\t%d\t-\t-\n", r.Name, r.URL, r.Labels, r.ErrorCount)
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\tError\t-\t%d\t-\t-\n", r.Name, r.URL, r.Labels, r.ErrorCount)
 				continue
 			}
 
@@ -63,7 +63,7 @@ var listCmd = &cobra.Command{
 				memLimit = fmt.Sprintf("%dMB", r.MemoryLimit)
 			}
 
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", r.Name, r.URL, r.Labels, status, info.Uptime, r.ErrorCount, cpuLimit, memLimit)
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", r.Name, r.URL, r.Labels, status, info.Uptime, r.ErrorCount, cpuLimit, memLimit)
 		}
 		if err := w.Flush(); err != nil {
 			log.Printf("Warning: failed to flush output: %v", err)

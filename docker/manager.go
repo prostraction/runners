@@ -94,12 +94,12 @@ func (m *Manager) StartRunner(ctx context.Context, runner *config.Runner) error 
 	}
 
 	if runner.CPULimit > 0 {
-		hostConfig.Resources.NanoCPUs = int64(runner.CPULimit * 1e9)
+		hostConfig.NanoCPUs = int64(runner.CPULimit * 1e9)
 	}
 	if runner.MemoryLimit > 0 {
 		memBytes := runner.MemoryLimit * 1024 * 1024
-		hostConfig.Resources.Memory = memBytes
-		hostConfig.Resources.MemorySwap = memBytes // Ensure swap limit is equal to memory limit
+		hostConfig.Memory = memBytes
+		hostConfig.MemorySwap = memBytes
 	}
 
 	resp, err := m.cli.ContainerCreate(ctx, &container.Config{

@@ -136,8 +136,8 @@ func TestPullImage(t *testing.T) {
 func TestStartRunner(t *testing.T) {
 	mock := &mockDockerClient{
 		containerCreateFunc: func(c *container.Config, h *container.HostConfig) (container.CreateResponse, error) {
-			if h.Resources.Memory != 512*1024*1024 {
-				t.Errorf("expected 512MB memory limit, got %d", h.Resources.Memory)
+			if h.Memory != 512*1024*1024 {
+				t.Errorf("expected 512MB memory limit, got %d", h.Memory)
 			}
 
 			// Check environment variables
@@ -523,7 +523,7 @@ func TestPurgeDataDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mkdirtemp: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	origConfigDir := config.ConfigDir
 	config.ConfigDir = tmpDir

@@ -101,8 +101,20 @@ jobs:
           cache: true
 
       - name: gofmt check
+        # gofmt -l walks given directories recursively and does NOT skip dotted
+        # subdirs, so passing the project root would chew on the in-workspace
+        # module cache at ${{ github.workspace }}/.go/pkg/mod and report
+        # third-party code as "needs reformat". Enumerate project .go files
+        # explicitly via find with prune.
         run: |
-          fmt_out=$(gofmt -l -s $(go list -f '{{.Dir}}' ./...))
+          files=$(find . \
+            \( -path ./.go -o -path ./.git -o -path ./vendor \) -prune \
+            -o -type f -name '*.go' -print)
+          if [ -z "$files" ]; then
+            echo "no .go files found"
+            exit 0
+          fi
+          fmt_out=$(gofmt -l -s $files)
           if [ -n "$fmt_out" ]; then
             echo "::error::gofmt would reformat:"
             echo "$fmt_out"
